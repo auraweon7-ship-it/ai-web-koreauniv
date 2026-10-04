@@ -1029,7 +1029,130 @@
   };
 
   /* ── 탭: 수강생 명단 ── */
+  /* 수강생 명단 — 서버(DB)에 저장되는 경우
+   * 수강 신청서를 내면 자동으로 등록되고, 관리자가 직접 추가·삭제할 수도 있습니다. */
+  var rosterRows = null;   // 서버에서 받아 온 명단
+  var rosterFresh = false; // 방금 받아 온 것인지
+  var rosterMsg = "";
+  function loadRoster() {
+    return adminCall("GET", "admin/roster").then(function (res) {
+      rosterRows = res.roster;
+      rosterFresh = true;
+      if (current === "roster" && panel && panel.parentNode) showTab("roster");
+    }, function () {});
+  }
+  function tabRosterRemote() {
+    if (!rosterFresh) {
+      loadRoster();
+      if (!rosterRows) return [h("p", { class: "cal-empty" }, "서버에서 수강생 명단을 불러오는 중입니다…")];
+    }
+    rosterFresh = false; // 다음에 탭을 열면 다시 받아 옵니다.
+    var rows = rosterRows;
+    var totalWeeks = KU.weeks.length;
+    var byApply = rows.filter(function (r) { return r.source === "apply"; }).length;
+    var msg = rosterMsg; rosterMsg = "";
+
+    function parseLines(text) {
+      var list = [];
+      text.split(/\r?\n/).forEach(function (line) {
+        var p = line.replace(/^\uFEFF/, "").split(/[,\t;]/).map(function (x) { return x.replace(/^["'\s]+|["'\s]+$/g, ""); });
+        if (p[0] || p[1]) list.push({ id: p[0], name: p[1] });
+      });
+      return list;
+    }
+    function addMany(list) {
+      if (!list.length) { rosterMsg = "추가할 내용이 없습니다."; return showTab("roster"); }
+      adminCall("POST", "admin/roster", { students: list }).then(function (res) {
+        rosterMsg = res.added + "명 추가" + (res.skipped ? ", " + res.skipped + "건 건너뜀(학번 10자리·이름 형식 또는 이미 등록됨)" : "");
+        loadRoster();
+      }, function () {});
+    }
+    var bulk = h("textarea", { rows: 4, placeholder: "2026000001, 홍길동\n2026000002, 김고려", "aria-label": "여러 명 붙여 넣기" });
+    var file = h("input", { type: "file", accept: ".csv,.txt", "aria-label": "명단 CSV 파일" });
+    file.addEventListener("change", function () {
+      if (!file.files[0]) return;
+      var reader = new FileReader();
+      reader.onload = function () { addMany(parseLines(String(reader.result))); };
+      reader.readAsText(file.files[0]);
+    });
+
+    var head = ["번호", "학번", "이름", "소속 학과", "학년", "이메일", "연락처", "등록 경로", "등록일", "출석", "과제 제출", "삭제"];
+    return [
+      note("수강 신청서를 낸 사람은 자동으로 이 명단에 등록됩니다. 명단에 한 명이라도 있으면 명단에 있는 학번·이름만 '내 강의실'에 로그인할 수 있습니다(수강 코드도 필요). 명단이 비어 있으면 수강 코드만 맞으면 됩니다."),
+      msg ? h("p", { class: "also-done", role: "status" }, msg) : null,
+      h("div", { class: "card ad-card" }, [
+        h("div", { class: "ad-row between" }, [
+          h("h4", {}, "👥 수강생 현황 (" + rows.length + "명)"),
+          h("span", { class: "ad-row" }, [
+            button("새로 고침", "btn btn-ghost btn-sm", function () { loadRoster(); }),
+            button("엑셀용 파일(CSV) 내려받기", "btn btn-ghost btn-sm", function () {
+              download("수강생_명단.csv", toCsv(head.slice(0, 11), rows.map(function (r, i) {
+                return [i + 1, r.id, r.name, r.department, r.grade, r.email, r.phone, r.source === "apply" ? "수강 신청" : "관리자 등록", stamp(r.at), r.attendance + "/" + totalWeeks, r.submissions];
+              })), "text/csv");
+            }),
+            confirmButton("명단 모두 지우기", "btn btn-ghost btn-sm", function () {
+              adminCall("DELETE", "admin/roster").then(function () { rosterMsg = "명단을 모두 지웠습니다."; loadRoster(); }, function () {});
+            }),
+          ]),
+        ]),
+        h("p", { class: "field-hint" }, "수강 신청으로 등록 " + byApply + "명 · 관리자가 등록 " + (rows.length - byApply) + "명"),
+        rows.length ? h("div", { class: "ad-table-wrap" }, [
+          h("table", { class: "ad-table" }, [
+            h("thead", {}, [h("tr", {}, head.map(function (x) { return h("th", {}, x); }))]),
+            h("tbody", {}, rows.map(function (r, i) {
+              return h("tr", {}, [
+                h("td", {}, i + 1), h("td", {}, r.id), h("td", {}, r.name),
+                h("td", {}, r.department || "—"), h("td", {}, r.grade || "—"), h("td", {}, r.email || "—"), h("td", {}, r.phone || "—"),
+                h("td", {}, [h("span", { class: "tag" + (r.source === "apply" ? " tag-assign" : "") }, r.source === "apply" ? "수강 신청" : "관리자 등록")]),
+                h("td", {}, stamp(r.at)),
+                h("td", {}, r.attendance + " / " + totalWeeks),
+                h("td", {}, r.submissions + "건"),
+                h("td", {}, [deleteButton(function () {
+                  adminCall("DELETE", "admin/roster/" + encodeURIComponent(r.id)).then(function () { rosterMsg = r.name + " 삭제"; loadRoster(); }, function () {});
+                })]),
+              ]);
+            })),
+          ]),
+        ]) : h("p", { class: "cal-empty" }, "아직 등록된 수강생이 없습니다. 수강 신청서가 들어오면 여기에 나타납니다."),
+      ]),
+      h("div", { class: "grid grid-2 ad-grid" }, [
+        h("div", { class: "card ad-card" }, [
+          h("h4", {}, "한 명 추가"),
+          makeForm([
+            { name: "id", label: "학번", type: "text", required: true, pattern: "^\\d{10}$", patternMsg: "학번은 숫자 10자리로 입력해 주세요." },
+            { name: "name", label: "이름", type: "text", required: true },
+          ], "명단에 추가", function (v, api) {
+            if (rows.some(function (r) { return r.id === v.id; })) return api.fail("id", "이미 등록된 학번입니다.");
+            addMany([{ id: v.id, name: v.name }]);
+          }),
+        ]),
+        h("div", { class: "card ad-card" }, [
+          h("h4", {}, "여러 명 한꺼번에"),
+          h("p", { class: "field-hint" }, "한 줄에 한 명씩 '학번, 이름'. 엑셀에서 두 열을 복사해 붙여도 됩니다."),
+          bulk,
+          h("div", { class: "ad-row" }, [
+            button("붙여 넣은 명단 추가", "btn btn-primary btn-sm", function () { addMany(parseLines(bulk.value)); }),
+            h("label", { class: "ad-file" }, ["CSV 파일로 추가 ", file]),
+          ]),
+        ]),
+      ]),
+      h("div", { class: "card ad-card" }, [
+        h("h4", {}, "수강 코드 바꾸기"),
+        h("p", { class: "field-hint" }, "수강생이 로그인할 때 쓰는 공용 코드입니다. 바꾼 뒤 위쪽 '저장하고 적용'을 눌러 주세요."),
+        makeForm([
+          { name: "code", label: "새 수강 코드", type: "text", required: true, pattern: "^.{4,}$", patternMsg: "4자 이상으로 입력해 주세요." },
+        ], "수강 코드 변경", function (v) {
+          draft.classroom.accessCodeHash = KU.hashSecret(v.code);
+          delete draft.classroom.accessCode;
+          rosterFresh = true;
+          markDirty(); showTab("roster");
+        }),
+      ]),
+    ];
+  }
+
   function tabRoster() {
+    if (REMOTE) return tabRosterRemote();
     var roster = store.get("roster", []);
     function sync() {
       store.set("roster", roster);

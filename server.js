@@ -49,7 +49,32 @@ async function initDb() {
     "CREATE TABLE IF NOT EXISTS attendance (student_id TEXT NOT NULL, week INTEGER NOT NULL, name TEXT NOT NULL, at BIGINT NOT NULL, PRIMARY KEY (student_id, week))",
     "CREATE TABLE IF NOT EXISTS submissions (id SERIAL PRIMARY KEY, student_id TEXT NOT NULL, name TEXT NOT NULL, week INTEGER NOT NULL, title TEXT NOT NULL, file_name TEXT NOT NULL, size INTEGER NOT NULL, memo TEXT NOT NULL, late BOOLEAN NOT NULL, at BIGINT NOT NULL)",
   ];
+  tables.push(
+    // 수강생 명단: 수강 신청서를 내면 자동으로 들어가고, 관리자가 직접 넣을 수도 있습니다.
+    "CREATE TABLE IF NOT EXISTS roster (student_id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL, grade TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, source TEXT NOT NULL, created_at BIGINT NOT NULL)"
+  );
   for (const sql of tables) await pool.query(sql);
+
+  // 명단 기능이 생기기 전에 들어온 신청서를 한 번만 명단으로 옮깁니다.
+  const done = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["roster_backfilled"]);
+  if (!done.rows.length) {
+    const apps = await pool.query("SELECT data, created_at FROM applications ORDER BY created_at");
+    for (const row of apps.rows) {
+      try { await enroll(JSON.parse(row.data), "apply", Number(row.created_at)); } catch (e) { /* 형식이 맞지 않는 신청서는 건너뜀 */ }
+    }
+    await pool.query("INSERT INTO site_kv (key, value, updated_at) VALUES ($1, $2, $3)", ["roster_backfilled", "1", Date.now()]);
+  }
+}
+
+// 수강생 명단에 넣기(이미 있으면 정보만 고침). 학번·이름이 맞지 않으면 false
+async function enroll(d, source, at) {
+  const id = str(d.studentId || d.id, 20).trim(), name = str(d.name, 40).trim();
+  if (!/^\d{10}$/.test(id) || !name) return false;
+  await pool.query(
+    "INSERT INTO roster (student_id, name, department, grade, email, phone, source, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) " +
+    "ON CONFLICT (student_id) DO UPDATE SET name = EXCLUDED.name, department = EXCLUDED.department, grade = EXCLUDED.grade, email = EXCLUDED.email, phone = EXCLUDED.phone",
+    [id, name, str(d.department, 60), str(d.grade, 20), str(d.email, 120), str(d.phone, 30), source, at || Date.now()]);
+  return true;
 }
 
 /* ── 설정 ── */
@@ -189,7 +214,8 @@ api.post("/applications", needDb, wrap(async function (req, res) {
   const text = JSON.stringify(data);
   if (text.length > 20000) return res.status(400).json({ error: "내용이 너무 깁니다." });
   await pool.query("INSERT INTO applications (data, created_at) VALUES ($1, $2)", [text, Date.now()]);
-  res.json({ ok: true });
+  const enrolled = await enroll(data, "apply"); // 수강생 명단에 자동 등록
+  res.json({ ok: true, enrolled: enrolled });
 }));
 
 /* 수강생 */
@@ -201,8 +227,16 @@ api.post("/student/login", needDb, wrap(async function (req, res) {
   if (!/^\d{10}$/.test(id) || !name) return res.status(400).json({ error: "학번과 이름을 확인해 주세요.", field: "id" });
   const codeOk = room.accessCodeHash ? same(hashSecret(code), room.accessCodeHash) : (!!room.accessCode && same(code, room.accessCode));
   if (!codeOk) return res.status(401).json({ error: "수강 코드가 맞지 않습니다.", field: "code" });
-  const roster = room.rosterHashes || [];
-  if (roster.length && roster.indexOf(rosterHash(id, name)) < 0) return res.status(403).json({ error: "수강생 명단에 없는 학번·이름입니다.", field: "id" });
+  // 명단이 하나라도 있으면 명단에 있는 학번·이름만 로그인할 수 있습니다.
+  const hashes = room.rosterHashes || [];
+  const total = Number((await pool.query("SELECT COUNT(*) AS n FROM roster")).rows[0].n);
+  if (total || hashes.length) {
+    const row = await pool.query("SELECT name FROM roster WHERE student_id = $1", [id]);
+    const inTable = row.rows.length && row.rows[0].name === name;
+    if (!inTable && hashes.indexOf(rosterHash(id, name)) < 0) {
+      return res.status(403).json({ error: "수강생 명단에 없는 학번·이름입니다. 수강 신청서를 먼저 내 주세요.", field: "id" });
+    }
+  }
   res.json({ token: sign({ role: "student", id: id, name: name, exp: Date.now() + 30 * DAY }), id: id, name: name });
 }));
 
@@ -299,6 +333,42 @@ api.delete("/config", needDb, needAdmin, wrap(async function (req, res) {
 api.post("/admin/poll/clear", needDb, needAdmin, wrap(async function (req, res) {
   await pool.query("DELETE FROM poll_votes WHERE poll_id = $1", [str(req.body.pollId, 60)]);
   res.json({ polls: await pollCounts() });
+}));
+
+/* 수강생 명단 */
+api.get("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
+  const r = await pool.query("SELECT student_id, name, department, grade, email, phone, source, created_at FROM roster ORDER BY created_at, student_id");
+  const att = await pool.query("SELECT student_id, COUNT(*) AS n FROM attendance GROUP BY student_id");
+  const sub = await pool.query("SELECT student_id, COUNT(*) AS n FROM submissions GROUP BY student_id");
+  const attN = {}, subN = {};
+  att.rows.forEach(function (x) { attN[x.student_id] = Number(x.n); });
+  sub.rows.forEach(function (x) { subN[x.student_id] = Number(x.n); });
+  res.json({
+    roster: r.rows.map(function (x) {
+      return {
+        id: x.student_id, name: x.name, department: x.department, grade: x.grade, email: x.email, phone: x.phone,
+        source: x.source, at: Number(x.created_at), attendance: attN[x.student_id] || 0, submissions: subN[x.student_id] || 0,
+      };
+    }),
+  });
+}));
+api.post("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
+  const list = Array.isArray(req.body.students) ? req.body.students.slice(0, 1000) : [];
+  let added = 0, skipped = 0;
+  for (const st of list) {
+    const id = str(st && st.id, 20).trim();
+    const exists = /^\d{10}$/.test(id) && (await pool.query("SELECT 1 FROM roster WHERE student_id = $1", [id])).rows.length;
+    if (!exists && (await enroll(st || {}, "admin"))) added++; else skipped++;
+  }
+  res.json({ added: added, skipped: skipped });
+}));
+api.delete("/admin/roster/:id", needDb, needAdmin, wrap(async function (req, res) {
+  await pool.query("DELETE FROM roster WHERE student_id = $1", [str(req.params.id, 20)]);
+  res.json({ ok: true });
+}));
+api.delete("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
+  await pool.query("DELETE FROM roster");
+  res.json({ ok: true });
 }));
 
 api.get("/admin/records", needDb, needAdmin, wrap(async function (req, res) {

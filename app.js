@@ -1010,6 +1010,7 @@
         h("div", { class: "done-icon", "aria-hidden": "true" }, "✓"),
         h("h4", {}, apply.successTitle),
         h("p", {}, apply.successText),
+        REMOTE ? h("p", { class: "done-meta" }, "수강생 명단에 등록되었습니다. 같은 학번·이름과 수강 코드로 '내 강의실'에 로그인할 수 있습니다.") : null,
         h("p", { class: "done-meta" }, saved.name + " (" + saved.studentId + ") · " + fmtStamp(saved.at)),
         again,
       ]));
