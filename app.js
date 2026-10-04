@@ -507,6 +507,7 @@
     ]);
   }
   var EMBED_RESIZE = "<script>(function(){function s(){var b=document.body;if(!b)return;parent.postMessage({kuEmbedHeight:Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,document.documentElement.offsetHeight))+2},'*')}s();addEventListener('load',s);if(window.ResizeObserver)new ResizeObserver(s).observe(document.body);setTimeout(s,800);})()<" + "/script>";
+  var EMBED_SCALE = 0.3; // 직접 만든 HTML(embed)을 내용 높이의 몇 배로 보여 줄지
   function buildEmbed(html, title) {
     var tpl = document.createElement("template");
     tpl.innerHTML = html; // template 안에서는 스크립트가 실행되지 않습니다(구조 확인용).
@@ -547,7 +548,10 @@
     var px = e.data && e.data.kuEmbedHeight;
     if (typeof px !== "number" || !isFinite(px)) return;
     [].forEach.call(document.querySelectorAll("iframe.embed-frame.auto"), function (f) {
-      if (f.contentWindow === e.source) f.style.height = Math.min(Math.max(px, 60), 3000) + "px";
+      if (f.contentWindow !== e.source) return;
+      // 내용 전체 높이의 30%만 보여 주고 나머지는 틀 안에서 스크롤합니다(너무 낮아지지 않게 최소 200px, 내용이 그보다 짧으면 내용 높이).
+      var full = Math.min(Math.max(px, 60), 3000);
+      f.style.height = Math.min(full, Math.max(Math.round(full * EMBED_SCALE), 200)) + "px";
     });
   });
   function loadVideos(root) {
