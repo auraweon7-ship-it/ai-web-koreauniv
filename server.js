@@ -201,7 +201,16 @@ function tooMany(req) {
 /* ── 앱 ── */
 const app = express();
 app.set("trust proxy", true);
+// 사이트 내용 저장(HTML 코드 embed 포함)은 크기가 클 수 있어 한도를 넉넉히 둡니다. 그 밖의 요청은 1MB.
+app.use("/api/config", express.json({ limit: "15mb" }));
 app.use(express.json({ limit: "1mb" }));
+app.use(function (err, req, res, next) {
+  if (err && err.type === "entity.too.large") {
+    return res.status(413).json({ error: "내용이 너무 큽니다(한도 " + Math.round(err.limit / 1048576) + "MB)." + (req.path === "/api/config" ? " HTML 코드에 넣은 이미지·파일은 구글 드라이브 등에 올리고 주소로 연결해 주세요." : "") });
+  }
+  if (err && err.type === "entity.parse.failed") return res.status(400).json({ error: "요청 형식이 올바르지 않습니다." });
+  next(err);
+});
 
 const api = express.Router();
 const wrap = (fn) => (req, res) => fn(req, res).catch(function (err) {
