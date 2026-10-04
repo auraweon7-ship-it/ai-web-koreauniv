@@ -1212,3 +1212,4 @@ body.is-admin .folio-add.admin-only { display: grid !important; }
 .header-login:hover { transform: translateY(-2px); }
 .header-login.on { background: #fff; color: var(--ink); border: 1px solid var(--line); }
 @media (max-width: 600px) { .header-login { padding: 8px 13px; font-size: 13px; max-width: 110px; } }
+.info-row dd .tag { margin-left: 8px; }

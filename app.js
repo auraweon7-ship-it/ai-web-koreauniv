@@ -1378,6 +1378,26 @@
       return;
     }
 
+    /* 4-1) 제출 완료 화면 */
+    if (self.done) {
+      var d = self.done;
+      head("🎉", "수고했습니다!", "과제가 정상 제출되었습니다.");
+      box.appendChild(h("dl", { class: "info-list" }, [
+        infoRow("제출자", me.name + " (" + me.id + ")"),
+        infoRow("제출 주차", d.week + "주차 · " + d.title),
+        infoRow("제출 일시", [fmtStamp(d.at), d.late ? h("span", { class: "tag" }, "지각 제출") : null]),
+        infoRow("제출 주소", h("a", { href: d.url, target: "_blank", rel: "noopener" }, "📎 구글 드라이브에서 열기 ↗")),
+      ]));
+      var okBtn = h("button", { class: "btn btn-primary", type: "button" }, "확인");
+      okBtn.addEventListener("click", self.close);
+      var again = h("button", { class: "modal-link", type: "button" }, "다시 제출하기");
+      again.addEventListener("click", function () { self.done = null; drawStudentModal(); });
+      box.appendChild(okBtn);
+      box.appendChild(h("div", { class: "modal-foot" }, [again]));
+      okBtn.focus();
+      return;
+    }
+
     /* 4) 과제 제출 */
     head("📤", "과제 제출", "");
     var nowText = h("b", {}, fmtStamp(Date.now()));
@@ -1404,16 +1424,22 @@
       if (!driveId(url)) return api.fail("driveUrl", "구글 드라이브 공유 주소가 아닙니다. (drive.google.com 또는 docs.google.com)");
       var at = Date.now();
       var rec = { week: w.week, title: w.assignment.title, url: url, file: "", size: 0, memo: values.memo, at: at, late: at > w._due.getTime() };
-      function done() { showToast(w.week + "주차 과제를 제출했습니다."); }
+      // 제출 완료: 창을 완료 화면으로 바꾸고 폭죽을 터뜨립니다.
+      function done() { self.done = rec; renderStudent(); fireworks(); }
       if (!REMOTE) {
         var all = store.get("submissions", {});
         (all[me.id] = all[me.id] || []).unshift(rec);
         store.set("submissions", all);
-        renderStudent();
         return done();
       }
       return call("POST", "submissions", { week: w.week, driveUrl: url, memo: values.memo }, me.token)
-        .then(function (res) { applyMine(res); done(); })
+        .then(function (res) {
+          var saved = (res.submissions || []).filter(function (x) { return Number(x.week) === Number(w.week); })[0];
+          if (saved) rec = saved; // 서버가 기록한 제출 시각·지각 여부
+          self.done = rec;
+          applyMine(res);
+          fireworks();
+        })
         .catch(function (err) {
           if (err.status === 401) { store.set("session", null); return syncMine(); }
           api.error(err.message);
