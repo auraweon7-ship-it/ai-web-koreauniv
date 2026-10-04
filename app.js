@@ -239,7 +239,7 @@
       h("div", { class: "hero-grid" }, [
         h("div", { class: "hero-copy" }, [
           h("span", { class: "hero-badge" }, hero.badge),
-          h("h1", {}, [courseName, site.version ? h("span", { class: "ver" }, site.version) : null]),
+          h("h1", {}, courseName), // 버전은 헤더에만 표시합니다.
           h("p", { class: "hero-subtitle" }, hero.subtitle),
           h("p", { class: "hero-dept" }, orgLine),
           h("p", { class: "hero-desc" }, hero.description),
@@ -449,15 +449,22 @@
     var m = /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|shorts\/|live\/))([\w-]{11})/.exec(url || "");
     return m ? m[1] : "";
   }
+  // 주차 안 묶음 제목: 아이콘 + 이름 + 개수
+  function blockHead(icon, title, count) {
+    return h("h4", {}, [h("span", { class: "wd-ico", "aria-hidden": "true" }, icon), title, count ? h("span", { class: "wd-count" }, count + "개") : null]);
+  }
   // 강의 자료(구글 드라이브 링크)
   function materialsBlock(w) {
     var list = (w.materials || []).filter(function (m) { return m && m.url; });
     if (!list.length) return null;
-    return h("div", {}, [
-      h("h4", {}, "강의 자료"),
-      h("div", { class: "meta-row" }, list.map(function (m) {
-        return h("a", { class: "contact material-link", href: m.url, target: "_blank", rel: "noopener" }, [
-          h("span", { "aria-hidden": "true" }, "📎"), m.label || "강의 자료", h("span", { class: "material-go", "aria-hidden": "true" }, "↗"),
+    return h("section", { class: "wd-block" }, [
+      blockHead("📎", "강의 자료", list.length),
+      h("div", { class: "file-list" }, list.map(function (m) {
+        var kind = /\/folders\//.test(m.url) ? "📁" : /\/presentation\//.test(m.url) ? "📽️" : /\/spreadsheets\//.test(m.url) ? "📊" : "📄";
+        return h("a", { class: "file-row", href: m.url, target: "_blank", rel: "noopener" }, [
+          h("span", { class: "file-ico", "aria-hidden": "true" }, kind),
+          h("span", { class: "file-name" }, m.label || "강의 자료"),
+          h("span", { class: "file-open" }, "열기 ↗"),
         ]);
       })),
     ]);
@@ -468,8 +475,8 @@
     if (!list.length) return null;
     var embeds = list.filter(function (v) { return youtubeId(v.url); });
     var links = list.filter(function (v) { return !youtubeId(v.url); });
-    return h("div", {}, [
-      h("h4", {}, "참고 영상"),
+    return h("section", { class: "wd-block" }, [
+      blockHead("▶", "참고 영상", list.length),
       embeds.length ? h("div", { class: "video-grid" }, embeds.map(function (v) {
         // 영상은 주차를 펼쳤을 때 불러옵니다(data-yt → iframe).
         return h("figure", { class: "video-item" }, [
@@ -490,8 +497,8 @@
   function embedsBlock(w) {
     var list = (w.embeds || []).filter(function (e) { return e && String(e.html || "").trim(); });
     if (!list.length) return null;
-    return h("div", {}, [
-      h("h4", {}, "실습·참고 콘텐츠"),
+    return h("section", { class: "wd-block" }, [
+      blockHead("🧩", "실습·참고 콘텐츠", list.length),
       h("div", { class: "embed-list" }, list.map(function (e) {
         var box = h("div", { class: "embed-box" });
         box._html = String(e.html); // 주차를 펼쳤을 때 불러옵니다.
@@ -555,27 +562,57 @@
     });
   }
 
+  // 다음 수업: 오늘을 포함해 가장 가까운 수업일의 주차
+  var day0 = new Date(); day0.setHours(0, 0, 0, 0); // 오늘 0시
+  var nextWeek = weeks.filter(function (w) { return w._date.getTime() >= day0.getTime(); })[0] || null;
+  function hasUrl(x) { return x && x.url; }
+  // 주차 제목 아래: 그 주차에 무엇이 들어 있는지 한눈에
+  function weekBadges(w) {
+    if (w.locked) return null;
+    var items = [
+      [(w.topics || []).length, "📚", "학습 내용"],
+      [(w.materials || []).filter(hasUrl).length, "📎", "강의 자료"],
+      [(w.videos || []).filter(hasUrl).length, "▶", "영상"],
+      [(w.embeds || []).filter(function (e) { return e && String(e.html || "").trim(); }).length, "🧩", "실습"],
+    ].filter(function (x) { return x[0]; });
+    if (!items.length) return null;
+    return h("div", { class: "week-badges" }, items.map(function (x) {
+      return h("span", { class: "wb", title: x[2] + " " + x[0] + "개" }, [h("span", { "aria-hidden": "true" }, x[1]), x[2] + " " + x[0]]);
+    }));
+  }
+  function fact(icon, label, value) {
+    return h("div", { class: "wd-fact" }, [h("span", { class: "wd-fact-ico", "aria-hidden": "true" }, icon), h("span", {}, [h("small", {}, label), h("b", {}, value)])]);
+  }
   var weekList = h("div", { class: "week-list" }, weeks.map(function (w) {
-    return h("details", { class: "card week-item reveal", id: "week-" + w.week }, [
+    var isNext = w === nextWeek;
+    var isPast = !isNext && w._date.getTime() < day0.getTime();
+    var materials = w.locked ? null : materialsBlock(w);
+    return h("details", { class: "card week-item reveal" + (isNext ? " is-next" : "") + (isPast ? " is-past" : ""), id: "week-" + w.week }, [
       h("summary", {}, [
         h("div", { class: "week-num" }, [h("span", {}, [h("b", {}, w.week), "주차"])]),
         h("div", { class: "week-sum" }, [
           h("h3", {}, [
             w.title,
+            isNext ? h("span", { class: "tag tag-now" }, w._date.getTime() === day0.getTime() ? "오늘 수업" : "다음 수업") : null,
             w.tag ? h("span", { class: "tag" }, w.tag) : null,
             w.assignment ? h("span", { class: "tag tag-assign" }, "과제") : null,
           ]),
-          h("div", { class: "week-when" }, fmtShort(w._date) + " · " + w._time),
+          h("div", { class: "week-when" }, fmtShort(w._date) + " · " + w._time + " · " + w._place),
+          weekBadges(w),
         ]),
       ]),
       h("div", { class: "week-detail" }, [
-        h("div", { class: "meta-row" }, [
-          h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "🗓️"), h("b", {}, "날짜·시간"), fmtDate(w._date) + " " + w._time]),
-          h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "📍"), h("b", {}, "장소"), w._place]),
+        h("div", { class: "wd-top" }, [
+          h("div", { class: "wd-facts" }, [fact("🗓️", "날짜", fmtDate(w._date)), fact("⏰", "시간", w._time), fact("📍", "장소", w._place)]),
+          w.locked ? null : h("div", { class: "att-slot", "data-week": String(w.week) }),
         ]),
-        w.locked ? null : h("div", { class: "att-slot", "data-week": String(w.week) }),
-        w.locked ? lockedBox() : h("div", {}, [h("h4", {}, "학습 내용"), dotList(w.topics || [])]),
-        w.locked ? null : materialsBlock(w),
+        w.locked ? lockedBox() : h("div", { class: "wd-grid" + (materials ? "" : " single") }, [
+          h("section", { class: "wd-block" }, [
+            blockHead("📚", "학습 내용", (w.topics || []).length),
+            (w.topics || []).length ? h("ol", { class: "topic-list" }, w.topics.map(function (t) { return h("li", {}, t); })) : h("p", { class: "wd-empty" }, "등록된 학습 내용이 없습니다."),
+          ]),
+          materials,
+        ]),
         w.locked ? null : videosBlock(w),
         w.locked ? null : embedsBlock(w),
         w.locked || !w.assignment ? null : assignmentBox(w),

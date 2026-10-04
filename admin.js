@@ -140,82 +140,352 @@
   // idx가 -1이면 새 주차, 아니면 그 번호의 주차 수정
   function weekDialog(idx) {
     var weeks = draft.curriculum.weeks;
+    var sched = draft.curriculum.schedule || {};
     var isNew = idx < 0;
     var w = isNew ? weekTemplate(weeks.length + 1) : clone(weeks[idx]); // 복사본을 고치고, 저장할 때만 반영
-    if (!Array.isArray(w.topics)) w.topics = [];
-    if (!Array.isArray(w.materials)) w.materials = [];
-    if (!Array.isArray(w.videos)) w.videos = [];
-    if (!Array.isArray(w.embeds)) w.embeds = [];
-    // 편집 칸 순서: 주차 번호·제목·꼬리표 → 학습 내용 → 강의 자료 → 참고 영상 → (과제·날짜)
-    var ordered = {};
-    ["week", "title", "tag", "topics", "materials", "videos", "embeds"].forEach(function (k) { ordered[k] = w[k]; });
-    Object.keys(w).forEach(function (k) { if (!(k in ordered)) ordered[k] = w[k]; });
-    w = ordered;
+    ["topics", "materials", "videos", "embeds"].forEach(function (k) { if (!Array.isArray(w[k])) w[k] = []; });
+    var customWhen = !!(w.date || w.time || w.location); // 이 주만 날짜·시간·장소를 따로 정했는지
+    var hasAssign = !!w.assignment;
+    var assign = w.assignment || { title: "", text: "", due: today() + "T23:59" };
+    var changed = false;
+    var current = "basic";
 
-    var close;
-    var alertBox = h("div", { class: "form-alert", role: "alert", hidden: "hidden" });
-    var editorBox = h("div", {});
-    function render() {
-      editorBox.textContent = "";
-      editorBox.appendChild(objectEditor(w, render));
+    /* ── 작은 부품 ── */
+    function touch() { changed = true; refreshChrome(); }
+    function bind(input, obj, key) {
+      input.value = obj[key] == null ? "" : obj[key];
+      input.addEventListener("input", function () { obj[key] = input.value; touch(); });
+      return input;
     }
-    function fail(msg) { alertBox.hidden = false; alertBox.textContent = msg; alertBox.scrollIntoView({ block: "nearest" }); }
-    var save = button(isNew ? "주차 추가" : "수정 내용 저장", "btn btn-primary", function () {
-      if (!String(w.title || "").trim()) return fail("제목을 입력해 주세요.");
-      w.topics = w.topics.filter(function (t) { return String(t || "").trim(); });
+    function textInput(obj, key, placeholder) { return bind(h("input", { type: "text", placeholder: placeholder || "" }), obj, key); }
+    function field(labelText, input, hint, cls) {
+      return h("label", { class: "wk-field" + (cls ? " " + cls : "") }, [h("span", { class: "wk-label" }, labelText), input, hint ? h("small", { class: "wk-hint" }, hint) : null]);
+    }
+    function icon(label, title, fn, cls) {
+      var b = button(label, "wk-ic" + (cls ? " " + cls : ""), fn);
+      b.title = title; b.setAttribute("aria-label", title);
+      return b;
+    }
+    // 목록 항목의 ↑ ↓ ✕
+    function rowTools(list, i) {
+      var up = icon("↑", "위로", function () { list.splice(i - 1, 0, list.splice(i, 1)[0]); touch(); show(current); });
+      var down = icon("↓", "아래로", function () { list.splice(i + 1, 0, list.splice(i, 1)[0]); touch(); show(current); });
+      up.disabled = i === 0; down.disabled = i === list.length - 1;
+      return h("span", { class: "wk-tools" }, [up, down, icon("✕", "삭제", function () { list.splice(i, 1); touch(); show(current); }, "danger")]);
+    }
+    function panelHead(title, text) { return h("div", { class: "wk-panel-head" }, [h("h3", {}, title), text ? h("p", {}, text) : null]); }
+    function empty(text) { return h("p", { class: "wk-empty" }, text); }
+    function switchRow(labelText, on, fn) {
+      var box = h("input", { type: "checkbox" });
+      box.checked = on;
+      box.addEventListener("change", function () { fn(box.checked); });
+      return h("label", { class: "wk-switch" }, [box, h("span", { class: "wk-switch-ui", "aria-hidden": "true" }), h("span", {}, labelText)]);
+    }
+
+    /* ── 탭별 화면 ── */
+    var PANELS = {
+      basic: function () {
+        var no = h("input", { type: "number", min: "1", max: "99" });
+        no.value = w.week;
+        no.addEventListener("input", function () { w.week = Number(no.value); touch(); });
+        var title = textInput(w, "title", "예: AI 웹 제작 도구 분석");
+        var tag = textInput(w, "tag", "비워 두면 표시하지 않습니다");
+        var chips = h("div", { class: "wk-chips" }, ["실습", "이론", "발표", "중간평가", "기말평가"].map(function (t) {
+          return button(t, "wk-chip", function () { w.tag = t; tag.value = t; touch(); });
+        }));
+        var whenBox = h("div", { class: "wk-when" });
+        function drawWhen() {
+          whenBox.textContent = "";
+          if (!customWhen) {
+            whenBox.appendChild(h("p", { class: "wk-note" }, [
+              h("b", {}, "기본 일정 "),
+              "첫 수업일부터 매주 자동 계산됩니다" + (sched.time || sched.location ? " · " + [sched.time, sched.location].filter(Boolean).join(" · ") : "") + ".",
+            ]));
+            return;
+          }
+          var date = bind(h("input", { type: "date" }), w, "date");
+          whenBox.appendChild(h("div", { class: "wk-grid three" }, [
+            field("날짜", date),
+            field("시간", textInput(w, "time", sched.time || "13:00 – 15:00"), "비우면 기본 시간"),
+            field("장소", textInput(w, "location", sched.location || ""), "비우면 기본 장소"),
+          ]));
+        }
+        drawWhen();
+        return [
+          panelHead("기본 정보", "주차 목록에 보이는 제목과 꼬리표입니다."),
+          h("div", { class: "wk-grid basic" }, [field("주차 번호", no), field("제목 *", title)]),
+          field("꼬리표", tag, null, "narrow"),
+          chips,
+          h("div", { class: "wk-card" }, [
+            switchRow("이 주만 날짜·시간·장소 따로 지정", customWhen, function (on) { customWhen = on; touch(); drawWhen(); }),
+            whenBox,
+          ]),
+        ];
+      },
+
+      topics: function () {
+        var list = h("div", { class: "wk-list" });
+        w.topics.forEach(function (t, i) {
+          var input = h("input", { type: "text", placeholder: "학습 내용을 입력하세요" });
+          input.value = t || "";
+          input.addEventListener("input", function () { w.topics[i] = input.value; touch(); });
+          input.addEventListener("keydown", function (e) { // Enter = 아래에 새 줄
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            w.topics.splice(i + 1, 0, ""); touch(); show("topics", i + 1);
+          });
+          input.addEventListener("paste", function (e) { // 여러 줄을 붙여 넣으면 줄마다 한 항목
+            var text = (e.clipboardData || window.clipboardData).getData("text");
+            var lines = text.split(/\r?\n/).map(function (s) { return s.replace(/^\s*(?:[-*•·⚫]|\d+[.)])\s*/, "").trim(); }).filter(Boolean);
+            if (lines.length < 2) return;
+            e.preventDefault();
+            w.topics.splice.apply(w.topics, [i, input.value.trim() ? 0 : 1].concat(lines));
+            touch(); show("topics");
+          });
+          list.appendChild(h("div", { class: "wk-row" }, [h("span", { class: "wk-no" }, String(i + 1)), input, rowTools(w.topics, i)]));
+        });
+        return [
+          panelHead("학습 내용", "한 줄에 하나씩 적습니다. Enter를 누르면 아래에 새 줄이 생기고, 여러 줄을 붙여 넣으면 줄마다 나뉩니다."),
+          w.topics.length ? list : empty("아직 학습 내용이 없습니다."),
+          button("＋ 학습 내용 추가", "wk-add", function () { w.topics.push(""); touch(); show("topics", w.topics.length - 1); }),
+        ];
+      },
+
+      materials: function () {
+        var name = h("input", { type: "text", placeholder: "자료 이름 (예: 3주차 강의안)", "aria-label": "자료 이름" });
+        var url = h("input", { type: "url", placeholder: "https://drive.google.com/…  공유 링크 붙여 넣기", "aria-label": "구글 드라이브 주소" });
+        var tip = h("small", { class: "wk-tip" });
+        function attach() {
+          var v = url.value.trim();
+          var msg = !v ? "구글 드라이브 주소를 붙여 넣어 주세요." : !KU.driveId(v) ? "구글 드라이브 주소가 아닙니다. (drive.google.com 또는 docs.google.com)"
+            : w.materials.some(function (m) { return m && String(m.url || "").trim() === v; }) ? "이미 첨부한 주소입니다." : "";
+          if (msg) { tip.className = "wk-tip bad"; tip.textContent = msg; return; }
+          w.materials.push({ label: name.value.trim() || "강의 자료 " + (w.materials.length + 1), url: v });
+          touch(); show("materials");
+        }
+        url.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); attach(); } });
+        var list = h("div", { class: "wk-list" }, w.materials.map(function (m, i) {
+          var ok = !!KU.driveId(String(m.url || "").trim());
+          var urlIn = bind(h("input", { type: "url", class: "wk-url", placeholder: "https://drive.google.com/…" }), m, "url");
+          var state = h("span", { class: "wk-state " + (ok ? "ok" : "bad") }, ok ? "✓ 드라이브" : "주소 확인");
+          urlIn.addEventListener("input", function () {
+            var good = !!KU.driveId(urlIn.value.trim());
+            state.className = "wk-state " + (good ? "ok" : "bad"); state.textContent = good ? "✓ 드라이브" : "주소 확인";
+          });
+          return h("div", { class: "wk-item" }, [
+            h("span", { class: "wk-thumb", "aria-hidden": "true" }, /\/folders\//.test(m.url || "") ? "📁" : "📄"),
+            h("div", { class: "wk-item-main" }, [bind(h("input", { type: "text", class: "wk-name", placeholder: "자료 이름" }), m, "label"), urlIn]),
+            h("div", { class: "wk-item-side" }, [state, rowTools(w.materials, i)]),
+          ]);
+        }));
+        return [
+          panelHead("강의 자료", "구글 드라이브에서 파일 → 공유 → '링크가 있는 모든 사용자'로 바꾼 뒤 링크를 복사해 붙여 넣으세요."),
+          h("div", { class: "wk-adder" }, [
+            h("div", { class: "wk-adder-row" }, [name, url, button("첨부", "wk-go", attach)]),
+            tip,
+          ]),
+          w.materials.length ? list : empty("첨부한 자료가 없습니다."),
+        ];
+      },
+
+      videos: function () {
+        var name = h("input", { type: "text", placeholder: "영상 제목", "aria-label": "영상 제목" });
+        var url = h("input", { type: "url", placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "영상 주소" });
+        var tip = h("small", { class: "wk-tip" });
+        function add() {
+          var v = url.value.trim();
+          if (!/^https?:\/\//.test(v)) { tip.className = "wk-tip bad"; tip.textContent = "https://로 시작하는 주소를 넣어 주세요."; return; }
+          w.videos.push({ label: name.value.trim(), url: v });
+          touch(); show("videos");
+        }
+        url.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); add(); } });
+        var list = h("div", { class: "wk-list" }, w.videos.map(function (v, i) {
+          var id = KU.youtubeId(String(v.url || "").trim());
+          var thumb = id ? h("img", { class: "wk-thumb video", src: "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg", alt: "", loading: "lazy" })
+            : h("span", { class: "wk-thumb video", "aria-hidden": "true" }, "🔗");
+          return h("div", { class: "wk-item" }, [
+            thumb,
+            h("div", { class: "wk-item-main" }, [
+              bind(h("input", { type: "text", class: "wk-name", placeholder: "영상 제목" }), v, "label"),
+              bind(h("input", { type: "url", class: "wk-url", placeholder: "https://…" }), v, "url"),
+            ]),
+            h("div", { class: "wk-item-side" }, [h("span", { class: "wk-state " + (id ? "ok" : "") }, id ? "▶ 바로 재생" : "링크로 표시"), rowTools(w.videos, i)]),
+          ]);
+        }));
+        return [
+          panelHead("참고 영상", "YouTube 주소를 넣으면 주차를 펼쳤을 때 그 자리에서 재생됩니다. 다른 주소는 링크로 표시됩니다."),
+          h("div", { class: "wk-adder" }, [h("div", { class: "wk-adder-row" }, [name, url, button("추가", "wk-go", add)]), tip]),
+          w.videos.length ? list : empty("등록한 영상이 없습니다."),
+        ];
+      },
+
+      embeds: function () {
+        var list = h("div", { class: "wk-list" }, w.embeds.map(function (e, i) {
+          var code = h("textarea", { class: "wk-code", rows: "9", spellcheck: "false", placeholder: "<iframe src=\"https://…\"></iframe>  또는  직접 만든 HTML 코드" });
+          var size = h("span", { class: "wk-size" });
+          var preview = h("div", { class: "wk-preview", hidden: "hidden" });
+          function measure() {
+            var kb = new Blob([code.value]).size / 1024;
+            size.textContent = kb < 1 ? Math.round(kb * 1024) + " B" : kb < 1024 ? kb.toFixed(1) + " KB" : (kb / 1024).toFixed(2) + " MB";
+            size.className = "wk-size" + (kb > 1024 ? " bad" : "");
+            size.title = kb > 1024 ? "코드가 큽니다. 이미지는 주소로 연결하는 편이 좋습니다." : "";
+          }
+          bind(code, e, "html");
+          code.addEventListener("input", function () { measure(); preview.hidden = true; preview.textContent = ""; });
+          measure();
+          var toggle = button("미리 보기", "wk-chip", function () {
+            if (!preview.hidden) { preview.hidden = true; preview.textContent = ""; toggle.textContent = "미리 보기"; return; }
+            preview.appendChild(h("iframe", { sandbox: "allow-scripts allow-forms allow-popups", title: "미리 보기", srcdoc: '<!doctype html><meta charset="utf-8"><base target="_blank"><style>body{margin:8px;font-family:system-ui,sans-serif}img,iframe,video{max-width:100%}</style>' + code.value }));
+            preview.hidden = false; toggle.textContent = "미리 보기 닫기";
+          });
+          return h("div", { class: "wk-embed" }, [
+            h("div", { class: "wk-embed-top" }, [h("span", { class: "wk-no" }, String(i + 1)), bind(h("input", { type: "text", class: "wk-name", placeholder: "이름 (화면에 설명으로 표시)" }), e, "label"), rowTools(w.embeds, i)]),
+            code,
+            h("div", { class: "wk-embed-foot" }, [size, toggle]),
+            preview,
+          ]);
+        }));
+        return [
+          panelHead("HTML 코드 (embed)", "구글 슬라이드·설문지·Canva·지도의 '퍼가기' 코드(<iframe …>)나 직접 만든 HTML을 넣으면 주차 안에 그대로 표시됩니다. 직접 만든 HTML은 격리된 틀에서 실행됩니다."),
+          w.embeds.length ? list : empty("등록한 HTML 코드가 없습니다."),
+          button("＋ HTML 코드 추가", "wk-add", function () { w.embeds.push({ label: "", html: "" }); touch(); show("embeds"); }),
+        ];
+      },
+
+      assign: function () {
+        var box = h("div", { class: "wk-assign" });
+        function draw() {
+          box.textContent = "";
+          if (!hasAssign) { box.appendChild(empty("이 주차에는 과제가 없습니다. 위 스위치를 켜면 과제를 만들 수 있습니다.")); return; }
+          var due = h("input", { type: "datetime-local" });
+          due.value = String(assign.due || "").slice(0, 16);
+          due.addEventListener("input", function () { assign.due = due.value; touch(); });
+          var text = bind(h("textarea", { rows: "4", placeholder: "과제 설명" }), assign, "text");
+          box.appendChild(field("과제 제목 *", textInput(assign, "title", "예: 중간 프로젝트: 개인별 AI 웹페이지")));
+          box.appendChild(field("과제 설명", text));
+          box.appendChild(h("div", { class: "wk-grid two" }, [
+            field("마감 일시 *", due, "마감 뒤 제출은 '지각 제출'로 기록됩니다."),
+            field("다른 사이트로 제출 (선택)", textInput(assign, "submitUrl", "https://…"), "비워 두면 이 사이트의 과제 제출 창이 열립니다."),
+          ]));
+        }
+        draw();
+        return [
+          panelHead("과제", "과제가 있는 주차에는 과제 상자와 '과제 제출하기' 버튼이 표시됩니다."),
+          h("div", { class: "wk-card" }, [switchRow("이 주차에 과제 있음", hasAssign, function (on) { hasAssign = on; touch(); draw(); }), box]),
+        ];
+      },
+    };
+    var TABS_W = [
+      ["basic", "기본 정보", "🗂️", function () { return ""; }],
+      ["topics", "학습 내용", "📚", function () { return w.topics.filter(function (t) { return String(t || "").trim(); }).length; }],
+      ["materials", "강의 자료", "📎", function () { return w.materials.length; }],
+      ["videos", "참고 영상", "▶", function () { return w.videos.length; }],
+      ["embeds", "HTML 코드", "🧩", function () { return w.embeds.length; }],
+      ["assign", "과제", "📝", function () { return hasAssign ? "✓" : ""; }],
+    ];
+
+    /* ── 창 ── */
+    var badge = h("span", { class: "wk-badge" });
+    var sub = h("p", { class: "wk-sub" });
+    var closeBtn = h("button", { class: "modal-close", type: "button", "aria-label": "닫기" }, "×");
+    var tabBar = h("div", { class: "wk-tabs", role: "tablist" });
+    var alertBox = h("div", { class: "form-alert wk-alert", role: "alert", hidden: "hidden" });
+    var body = h("div", { class: "wk-body" });
+    var state = h("span", { class: "wk-foot-state" });
+    var save = button(isNew ? "주차 추가" : "수정 내용 저장", "btn btn-primary", onSave);
+    var modal = h("div", { class: "modal wk-modal", role: "dialog", "aria-modal": "true", "aria-label": isNew ? "주차 추가" : "주차 수정" }, [
+      h("div", { class: "wk-head" }, [badge, h("div", { class: "wk-head-text" }, [h("h2", {}, isNew ? "주차 추가" : "주차 수정"), sub]), closeBtn]),
+      tabBar, alertBox, body,
+      h("div", { class: "wk-foot" }, [state, button("취소", "wk-cancel", function () { close(); }), save]),
+    ]);
+    var backdrop = h("div", { class: "modal-backdrop" }, [modal]);
+    var closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      backdrop.classList.remove("show");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(function () { backdrop.remove(); }, 250);
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    closeBtn.addEventListener("click", close);
+    backdrop.addEventListener("mousedown", function (e) { if (e.target === backdrop && !changed) close(); }); // 고친 내용이 있으면 바깥을 눌러도 닫히지 않습니다.
+    document.addEventListener("keydown", onKey);
+
+    TABS_W.forEach(function (t) {
+      var b = button("", "wk-tab", function () { show(t[0]); });
+      b.setAttribute("role", "tab"); b.setAttribute("data-tab", t[0]);
+      tabBar.appendChild(b);
+    });
+    // 머리글·탭 숫자·저장 상태를 지금 값으로
+    function refreshChrome() {
+      badge.textContent = "";
+      badge.appendChild(h("b", {}, String(w.week || "?")));
+      badge.appendChild(document.createTextNode("주차"));
+      sub.textContent = String(w.title || "").trim() || "제목을 입력해 주세요";
+      [].forEach.call(tabBar.children, function (b, i) {
+        var t = TABS_W[i], n = t[3]();
+        b.textContent = "";
+        b.appendChild(h("span", { class: "wk-tab-ico", "aria-hidden": "true" }, t[2]));
+        b.appendChild(document.createTextNode(t[1]));
+        if (n !== "" && n !== 0) b.appendChild(h("span", { class: "wk-count" }, String(n)));
+        b.classList.toggle("active", t[0] === current);
+        b.setAttribute("aria-selected", String(t[0] === current));
+      });
+      state.textContent = changed ? "● 저장하지 않은 변경 사항이 있습니다" : "";
+    }
+    // 탭 열기. focusIdx가 있으면 그 줄의 입력 칸에 커서를 둡니다.
+    function show(id, focusIdx) {
+      current = id;
+      body.textContent = "";
+      PANELS[id]().forEach(function (el) { if (el) body.appendChild(el); });
+      refreshChrome();
+      if (focusIdx != null) {
+        var rows = body.querySelectorAll(".wk-row input");
+        if (rows[focusIdx]) rows[focusIdx].focus();
+      }
+    }
+    function fail(tab, msg) {
+      show(tab);
+      alertBox.hidden = false; alertBox.textContent = msg;
+      return false;
+    }
+    function onSave() {
+      alertBox.hidden = true;
+      if (!String(w.title || "").trim()) return fail("basic", "제목을 입력해 주세요.");
+      if (!(Number(w.week) >= 1)) return fail("basic", "주차 번호를 확인해 주세요.");
+      w.week = Number(w.week);
+      w.title = w.title.trim();
+      w.tag = String(w.tag || "").trim();
+      w.topics = w.topics.map(function (t) { return String(t || "").trim(); }).filter(Boolean);
       w.materials = w.materials.filter(function (m) { return m && String(m.url || "").trim(); });
       w.videos = w.videos.filter(function (v) { return v && String(v.url || "").trim(); });
       w.embeds = w.embeds.filter(function (e) { return e && String(e.html || "").trim(); });
       var badMaterial = w.materials.filter(function (m) { return !KU.driveId(m.url.trim()); })[0];
-      if (badMaterial) return fail("강의 자료 주소가 구글 드라이브 주소가 아닙니다: " + badMaterial.url);
+      if (badMaterial) return fail("materials", "강의 자료 주소가 구글 드라이브 주소가 아닙니다: " + badMaterial.url);
       var badVideo = w.videos.filter(function (v) { return !/^https?:\/\//.test(v.url.trim()); })[0];
-      if (badVideo) return fail("참고 영상 주소는 https://로 시작해야 합니다: " + badVideo.url);
-      w.materials.forEach(function (m) { m.url = m.url.trim(); });
-      w.videos.forEach(function (v) { v.url = v.url.trim(); });
+      if (badVideo) return fail("videos", "참고 영상 주소는 https://로 시작해야 합니다: " + badVideo.url);
+      w.materials.forEach(function (m, i) { m.url = m.url.trim(); m.label = String(m.label || "").trim() || "강의 자료 " + (i + 1); });
+      w.videos.forEach(function (v) { v.url = v.url.trim(); v.label = String(v.label || "").trim(); });
+      if (hasAssign) {
+        if (!String(assign.title || "").trim()) return fail("assign", "과제 제목을 입력해 주세요.");
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(assign.due || ""))) return fail("assign", "과제 마감 일시를 입력해 주세요.");
+        assign.title = assign.title.trim();
+        assign.due = assign.due.slice(0, 16);
+        if (!String(assign.submitUrl || "").trim()) delete assign.submitUrl; else assign.submitUrl = assign.submitUrl.trim();
+        w.assignment = assign;
+      } else delete w.assignment;
+      if (customWhen && (w.date || w.time || w.location)) {
+        ["date", "time", "location"].forEach(function (k) { w[k] = String(w[k] || "").trim(); if (!w[k]) delete w[k]; });
+      } else { delete w.date; delete w.time; delete w.location; }
       if (isNew) weeks.push(w); else weeks[idx] = w;
-      saved = true;
       close();
       saveDraft(true, "weeks-title");
-    });
-    var saved = false;
-    render();
-    // 구글 드라이브 주소 첨부: 주소를 붙여 넣고 '첨부'를 누르면 강의 자료 목록에 바로 들어갑니다.
-    var driveUrl = h("input", { type: "url", placeholder: "https://drive.google.com/…  (공유 링크 붙여 넣기)", "aria-label": "구글 드라이브 주소" });
-    var driveLabel = h("input", { type: "text", placeholder: "자료 이름 (예: 3주차 강의안)", "aria-label": "자료 이름" });
-    var driveTip = h("small", { class: "ed-tip" });
-    var driveList = h("ul", { class: "drive-attached" });
-    function showAttached() {
-      driveList.textContent = "";
-      w.materials.forEach(function (m, i) {
-        if (!m || !String(m.url || "").trim()) return;
-        var link = h("a", { href: m.url, target: "_blank", rel: "noopener" }, "📄 " + (m.label || "강의 자료 " + (i + 1)));
-        var del = button("삭제", "ad-mini", function () { w.materials.splice(i, 1); render(); showAttached(); });
-        driveList.appendChild(h("li", {}, [link, del]));
-      });
-      driveList.hidden = !driveList.children.length;
     }
-    function attachDrive() {
-      var url = driveUrl.value.trim();
-      if (!url) { driveTip.className = "ed-tip bad"; driveTip.textContent = "구글 드라이브 주소를 붙여 넣어 주세요."; return; }
-      if (!KU.driveId(url)) { driveTip.className = "ed-tip bad"; driveTip.textContent = "구글 드라이브 주소가 아닙니다. (drive.google.com 또는 docs.google.com)"; return; }
-      if (w.materials.some(function (m) { return m && String(m.url || "").trim() === url; })) { driveTip.className = "ed-tip bad"; driveTip.textContent = "이미 첨부한 주소입니다."; return; }
-      w.materials = w.materials.filter(function (m) { return m && String(m.url || "").trim(); });
-      w.materials.push({ label: driveLabel.value.trim() || "강의 자료 " + (w.materials.length + 1), url: url });
-      driveUrl.value = ""; driveLabel.value = "";
-      driveTip.className = "ed-tip ok"; driveTip.textContent = "✓ 첨부했습니다. 아래 '저장'을 눌러야 반영됩니다.";
-      render(); showAttached();
-    }
-    driveUrl.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); attachDrive(); } });
-    var driveBox = h("div", { class: "drive-attach" }, [
-      h("b", {}, "📎 구글 드라이브 주소 첨부"),
-      h("small", {}, "구글 드라이브에서 파일 → 공유 → '링크가 있는 모든 사용자'로 바꾼 뒤 링크를 복사해 붙여 넣으세요."),
-      h("div", { class: "drive-attach-row" }, [driveLabel, driveUrl, button("첨부", "btn btn-primary", attachDrive)]),
-      driveTip, driveList,
-    ]);
-    showAttached();
-    close = dialog(isNew ? "주차 추가" : (w.week + "주차 수정"), "", h("div", { class: "guide-edit" }, [alertBox, driveBox, editorBox, save]), "🗓️");
-    var backs = document.querySelectorAll(".modal-backdrop");
-    backs[backs.length - 1].querySelector(".modal").classList.add("modal-wide");
+
+    document.body.appendChild(backdrop);
+    show("basic");
+    requestAnimationFrame(function () { backdrop.classList.add("show"); });
   }
   // 주차 카드마다 수정·삭제 버튼, 목록 끝에 '주차 추가' 칸 (관리자 로그인 중에만 보임)
   (function () {
