@@ -1174,3 +1174,12 @@ body.is-admin .folio-add.admin-only { display: grid !important; }
 .drive-attached li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: 12px; background: #fff; min-width: 0; }
 .drive-attached a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 @media (max-width: 640px) { .drive-attach-row { grid-template-columns: 1fr; } }
+
+/* ── 주차별 학습: HTML 코드(embed) ── */
+.embed-list { display: grid; gap: 16px; margin-bottom: 10px; }
+.embed-item { margin: 0; min-width: 0; }
+.embed-item figcaption { margin-top: 6px; font-size: 14px; color: var(--ink-soft); }
+.embed-box { display: grid; gap: 10px; min-width: 0; }
+.embed-frame { display: block; width: 100%; height: 320px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
+.embed-frame.ratio { height: auto; aspect-ratio: 16 / 9; }
+.modal textarea[data-key="html"], .ed-field textarea.code { font-family: Consolas, "D2Coding", monospace; font-size: 13px; min-height: 180px; }

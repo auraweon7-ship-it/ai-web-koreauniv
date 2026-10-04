@@ -471,6 +471,65 @@
       })) : null,
     ]);
   }
+  /* HTML 코드(embed): 관리자가 넣은 HTML을 주차 안에서 바로 보여 줍니다.
+   * - 코드가 <iframe> 태그뿐이면(구글 슬라이드·Canva·지도 등의 '퍼가기' 코드) 그 주소를 그대로 띄웁니다.
+   * - 그 밖의 HTML은 격리된 틀(sandbox) 안에서 실행합니다. 이 사이트의 로그인 정보·저장소에는 접근할 수 없습니다. */
+  function embedsBlock(w) {
+    var list = (w.embeds || []).filter(function (e) { return e && String(e.html || "").trim(); });
+    if (!list.length) return null;
+    return h("div", {}, [
+      h("h4", {}, "실습·참고 콘텐츠"),
+      h("div", { class: "embed-list" }, list.map(function (e) {
+        var box = h("div", { class: "embed-box" });
+        box._html = String(e.html); // 주차를 펼쳤을 때 불러옵니다.
+        return h("figure", { class: "embed-item" }, [box, e.label ? h("figcaption", {}, e.label) : null]);
+      })),
+    ]);
+  }
+  var EMBED_RESIZE = "<script>(function(){function s(){var b=document.body;if(!b)return;parent.postMessage({kuEmbedHeight:Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,document.documentElement.offsetHeight))+2},'*')}s();addEventListener('load',s);if(window.ResizeObserver)new ResizeObserver(s).observe(document.body);setTimeout(s,800);})()<" + "/script>";
+  function buildEmbed(html, title) {
+    var tpl = document.createElement("template");
+    tpl.innerHTML = html; // template 안에서는 스크립트가 실행되지 않습니다(구조 확인용).
+    var nodes = [].filter.call(tpl.content.childNodes, function (n) { return n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()); });
+    var onlyFrames = nodes.length && nodes.every(function (n) { return n.nodeType === 1 && n.tagName === "IFRAME" && /^https:\/\//i.test(n.getAttribute("src") || ""); });
+    if (onlyFrames) {
+      return nodes.map(function (n) {
+        var px = parseInt(n.getAttribute("height"), 10);
+        var frame = h("iframe", {
+          class: "embed-frame" + (px ? "" : " ratio"), src: n.getAttribute("src"), title: n.getAttribute("title") || title, loading: "lazy",
+          allowfullscreen: "allowfullscreen", referrerpolicy: "strict-origin-when-cross-origin",
+          allow: n.getAttribute("allow") || "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share",
+        });
+        if (px) frame.style.height = Math.min(Math.max(px, 120), 2000) + "px";
+        return frame;
+      });
+    }
+    var whole = /<html[\s>]|<!doctype/i.test(html);
+    var doc = whole ? html + EMBED_RESIZE
+      : '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank">' +
+        '<style>html,body{margin:0}body{display:flow-root;padding:2px 4px;font-family:"Noto Sans KR",system-ui,sans-serif;line-height:1.6;color:#1b1b1b;overflow-wrap:anywhere}img,video,iframe,table{max-width:100%}</style></head><body>' +
+        html + EMBED_RESIZE + "</body></html>";
+    return [h("iframe", {
+      class: "embed-frame auto", srcdoc: doc, title: title, loading: "lazy",
+      sandbox: "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox", // allow-same-origin은 주지 않습니다.
+    })];
+  }
+  function loadEmbeds(root) {
+    [].forEach.call(root.querySelectorAll(".embed-box"), function (box) {
+      if (!box._html) return;
+      var cap = box.parentNode.querySelector("figcaption");
+      buildEmbed(box._html, cap ? cap.textContent : "실습·참고 콘텐츠").forEach(function (f) { box.appendChild(f); });
+      box._html = null;
+    });
+  }
+  // 격리된 틀이 알려 주는 내용 높이에 맞춰 틀 높이를 조절합니다.
+  window.addEventListener("message", function (e) {
+    var px = e.data && e.data.kuEmbedHeight;
+    if (typeof px !== "number" || !isFinite(px)) return;
+    [].forEach.call(document.querySelectorAll("iframe.embed-frame.auto"), function (f) {
+      if (f.contentWindow === e.source) f.style.height = Math.min(Math.max(px, 60), 3000) + "px";
+    });
+  });
   function loadVideos(root) {
     [].forEach.call(root.querySelectorAll(".video-frame[data-yt]"), function (box) {
       box.appendChild(h("iframe", {
@@ -504,13 +563,14 @@
         w.locked ? lockedBox() : h("div", {}, [h("h4", {}, "학습 내용"), dotList(w.topics || [])]),
         w.locked ? null : materialsBlock(w),
         w.locked ? null : videosBlock(w),
+        w.locked ? null : embedsBlock(w),
         w.locked || !w.assignment ? null : assignmentBox(w),
       ]),
     ]);
   }));
 
   [].forEach.call(weekList.children, function (item) {
-    item.addEventListener("toggle", function () { if (item.open) loadVideos(item); });
+    item.addEventListener("toggle", function () { if (item.open) { loadVideos(item); loadEmbeds(item); } });
   });
 
   /* 월간 달력 */

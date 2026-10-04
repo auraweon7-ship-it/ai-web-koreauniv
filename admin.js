@@ -135,7 +135,7 @@
    * 주차마다 강의 자료(구글 드라이브)와 참고 영상(YouTube)을 붙일 수 있습니다.
    * 저장하면 수업 날짜·달력을 다시 계산해야 해서 화면을 새로 고칩니다. */
   function weekTemplate(n) {
-    return { week: n, title: "", tag: "", topics: [""], materials: [], videos: [] };
+    return { week: n, title: "", tag: "", topics: [""], materials: [], videos: [], embeds: [] };
   }
   // idx가 -1이면 새 주차, 아니면 그 번호의 주차 수정
   function weekDialog(idx) {
@@ -145,9 +145,10 @@
     if (!Array.isArray(w.topics)) w.topics = [];
     if (!Array.isArray(w.materials)) w.materials = [];
     if (!Array.isArray(w.videos)) w.videos = [];
+    if (!Array.isArray(w.embeds)) w.embeds = [];
     // 편집 칸 순서: 주차 번호·제목·꼬리표 → 학습 내용 → 강의 자료 → 참고 영상 → (과제·날짜)
     var ordered = {};
-    ["week", "title", "tag", "topics", "materials", "videos"].forEach(function (k) { ordered[k] = w[k]; });
+    ["week", "title", "tag", "topics", "materials", "videos", "embeds"].forEach(function (k) { ordered[k] = w[k]; });
     Object.keys(w).forEach(function (k) { if (!(k in ordered)) ordered[k] = w[k]; });
     w = ordered;
 
@@ -164,6 +165,7 @@
       w.topics = w.topics.filter(function (t) { return String(t || "").trim(); });
       w.materials = w.materials.filter(function (m) { return m && String(m.url || "").trim(); });
       w.videos = w.videos.filter(function (v) { return v && String(v.url || "").trim(); });
+      w.embeds = w.embeds.filter(function (e) { return e && String(e.html || "").trim(); });
       var badMaterial = w.materials.filter(function (m) { return !KU.driveId(m.url.trim()); })[0];
       if (badMaterial) return fail("강의 자료 주소가 구글 드라이브 주소가 아닙니다: " + badMaterial.url);
       var badVideo = w.videos.filter(function (v) { return !/^https?:\/\//.test(v.url.trim()); })[0];
@@ -780,6 +782,7 @@
     suffix: "단위", eyebrow: "작은 영문 제목", title: "제목", lead: "소개 문구", slides: "슬라이드", text: "내용",
     weeksTitle: "주차 목록 제목", calendarTitle: "달력 제목", schedule: "수업 일정 기본값", firstClass: "첫 수업일 (연-월-일)",
     time: "수업 시간", location: "수업 장소", submitUrl: "과제 제출 주소", weeks: "주차", week: "주차 번호", tag: "꼬리표",
+    embeds: "HTML 코드 (embed)", html: "HTML 코드",
     topics: "학습 내용", videos: "참고 영상 (YouTube)", materials: "강의 자료 (구글 드라이브)", url: "주소", assignment: "과제", due: "마감 (연-월-일T시:분)", date: "날짜 (연-월-일)",
     toolsTitle: "도구 제목", tools: "AI 도구", name: "이름", category: "분류", prepTitle: "준비물 제목", prep: "준비물",
     poll: "투표", help: "도움말", options: "보기", apply: "수강 신청서", notice: "안내 문구", endpoint: "전송할 서버 주소",
@@ -803,17 +806,19 @@
   };
   var HIDE = { rosterHashes: 1, accessCodeHash: 1, accessCode: 1, passwordHash: 1, version: 1, locked: 1 };
   var ONE_LINE = { url: 1, href: 1, driveUrl: 1, buttonHref: 1, submitUrl: 1, photo: 1, logoImage: 1, endpoint: 1 }; // 주소는 길어도 한 줄 칸
-  var LONG = { text: 1, description: 1, a: 1, lead: 1, notice: 1, successText: 1 };
+  var LONG = { html: 1, text: 1, description: 1, a: 1, lead: 1, notice: 1, successText: 1 };
   var TEMPLATES = {
     items: { title: "", text: "", date: "", pinned: false },
     videos: { label: "", url: "" },
     materials: { label: "", url: "" },
+    embeds: { label: "", html: "" },
     events: { date: "", title: "", type: "행사", text: "" },
   };
   var EVENT_TYPES = ["휴강", "보강", "특강", "행사", "공휴일", "기타"];
-  var ADD_LABELS = { materials: "📎 구글 드라이브 자료 첨부", videos: "▶ YouTube 영상 추가", topics: "＋ 학습 내용 추가" };
+  var ADD_LABELS = { materials: "📎 구글 드라이브 자료 첨부", videos: "▶ YouTube 영상 추가", embeds: "＜/＞ HTML 코드 추가", topics: "＋ 학습 내용 추가" };
   // 묶음 제목 아래에 보여 줄 도움말
   var SET_HINTS = {
+    embeds: "HTML 코드를 붙여 넣으면 주차를 펼쳤을 때 그 자리에 바로 표시됩니다. 구글 슬라이드·설문지·Canva·지도 등의 '퍼가기(embed)' 코드(<iframe …>)나 직접 만든 HTML·CSS·JavaScript 모두 됩니다. 직접 만든 HTML은 격리된 틀 안에서 실행되어 이 사이트의 로그인 정보에 접근할 수 없습니다.",
     materials: "구글 드라이브에서 파일 → 공유 → 링크 복사로 얻은 주소를 넣습니다. 공유 범위는 '링크가 있는 모든 사용자 – 뷰어'로 맞춰 주세요.",
     videos: "YouTube 주소를 넣으면 주차를 펼쳤을 때 그 자리에서 바로 재생됩니다. 다른 주소는 링크로 표시됩니다.",
   };
@@ -838,6 +843,10 @@
     }
     var long = typeof v === "string" && !ONE_LINE[key] && (v.length > 40 || LONG[key]);
     input = h(long ? "textarea" : "input", long ? { rows: 3 } : { type: typeof v === "number" ? "number" : "text" });
+    if (key === "html") { // HTML 코드 칸: 넓게, 맞춤법 검사 없이
+      input = h("textarea", { rows: 8, class: "code", spellcheck: "false", placeholder: "<iframe src=\"https://…\"></iframe>  또는  직접 만든 HTML 코드" });
+      long = true;
+    }
     input.value = v;
     input.addEventListener("input", function () {
       parent[key] = typeof v === "number" ? Number(input.value) : input.value;
@@ -864,9 +873,10 @@
     if (!Array.isArray(obj.topics)) obj.topics = [];
     if (!Array.isArray(obj.materials)) obj.materials = [];
     if (!Array.isArray(obj.videos)) obj.videos = [];
+    if (!Array.isArray(obj.embeds)) obj.embeds = [];
     var copy = {};
     Object.keys(obj).forEach(function (k) { copy[k] = obj[k]; delete obj[k]; });
-    ["week", "title", "tag", "topics", "materials", "videos"].forEach(function (k) { if (k in copy) obj[k] = copy[k]; });
+    ["week", "title", "tag", "topics", "materials", "videos", "embeds"].forEach(function (k) { if (k in copy) obj[k] = copy[k]; });
     Object.keys(copy).forEach(function (k) { if (!(k in obj)) obj[k] = copy[k]; });
   }
   var URL_CHECKS = {
