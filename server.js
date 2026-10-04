@@ -51,9 +51,11 @@ async function initDb() {
   ];
   tables.push(
     // 수강생 명단: 수강 신청서를 내면 자동으로 들어가고, 관리자가 직접 넣을 수도 있습니다.
-    "CREATE TABLE IF NOT EXISTS roster (student_id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL, grade TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, source TEXT NOT NULL, created_at BIGINT NOT NULL)"
+    "CREATE TABLE IF NOT EXISTS roster (student_id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL, grade TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, source TEXT NOT NULL, created_at BIGINT NOT NULL, approved BOOLEAN NOT NULL DEFAULT FALSE)"
   );
   for (const sql of tables) await pool.query(sql);
+  // 승인 기능이 생기기 전에 만든 명단 표에는 승인 열을 덧붙입니다(이미 있으면 그대로).
+  try { await pool.query("ALTER TABLE roster ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT FALSE"); } catch (e) { /* 이미 있음 */ }
 
   // 명단 기능이 생기기 전에 들어온 신청서를 한 번만 명단으로 옮깁니다.
   const done = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["roster_backfilled"]);
@@ -71,9 +73,9 @@ async function enroll(d, source, at) {
   const id = str(d.studentId || d.id, 20).trim(), name = str(d.name, 40).trim();
   if (!/^\d{10}$/.test(id) || !name) return false;
   await pool.query(
-    "INSERT INTO roster (student_id, name, department, grade, email, phone, source, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) " +
+    "INSERT INTO roster (student_id, name, department, grade, email, phone, source, created_at, approved) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) " +
     "ON CONFLICT (student_id) DO UPDATE SET name = EXCLUDED.name, department = EXCLUDED.department, grade = EXCLUDED.grade, email = EXCLUDED.email, phone = EXCLUDED.phone",
-    [id, name, str(d.department, 60), str(d.grade, 20), str(d.email, 120), str(d.phone, 30), source, at || Date.now()]);
+    [id, name, str(d.department, 60), str(d.grade, 20), str(d.email, 120), str(d.phone, 30), source, at || Date.now(), source === "admin"]);
   return true;
 }
 
@@ -92,6 +94,39 @@ async function getOverride() {
 }
 async function effectiveConfig() {
   return (pool && (await getOverride())) || BASE_CONFIG;
+}
+
+/* ── 승인과 공개 범위 ──
+ * '주차별 학습'의 내용(학습 내용·강의 자료·참고 영상·과제 설명)은 관리자와 승인된 수강생에게만 보냅니다.
+ * 그 밖의 방문자에게는 주차 제목과 날짜만 남긴 설정을 보냅니다. */
+function publicConfig(cfg) {
+  const out = JSON.parse(JSON.stringify(cfg));
+  if (out.curriculum && Array.isArray(out.curriculum.weeks)) {
+    out.curriculum.weeks = out.curriculum.weeks.map(function (w) {
+      const slim = { week: w.week, title: w.title, tag: w.tag, locked: true };
+      ["date", "time", "location"].forEach(function (k) { if (w[k]) slim[k] = w[k]; });
+      if (w.assignment) slim.assignment = { title: w.assignment.title, due: w.assignment.due };
+      return slim;
+    });
+  }
+  return out;
+}
+// 승인된 수강생인지: 명단에 있고 승인됨. (예전 방식의 명단 지문에 있는 사람도 승인된 것으로 봅니다.)
+async function isApproved(id, name, cfg) {
+  const r = await pool.query("SELECT name, approved FROM roster WHERE student_id = $1", [id]);
+  if (r.rows.length && r.rows[0].name === name) return !!r.rows[0].approved;
+  const hashes = (cfg.classroom && cfg.classroom.rosterHashes) || [];
+  return hashes.indexOf(rosterHash(id, name)) >= 0;
+}
+// 요청을 보낸 사람이 누구인지
+async function whoIs(req, cfg) {
+  const t = bearer(req);
+  if (t && t.role === "admin") return { role: "admin", full: true, approved: true };
+  if (t && t.role === "student") {
+    const approved = await isApproved(t.id, t.name, cfg);
+    return { role: "student", full: approved, approved: approved };
+  }
+  return { role: null, full: false, approved: false };
 }
 
 /* ── 도우미 ── */
@@ -189,7 +224,14 @@ async function pollCounts() {
 // 사이트가 처음 열릴 때 한 번 읽어 가는 정보
 api.get("/state", wrap(async function (req, res) {
   if (!pool) return res.json({ db: false });
-  res.json({ db: true, config: await getOverride(), polls: await pollCounts() });
+  const override = await getOverride();
+  const cfg = override || BASE_CONFIG;
+  const who = await whoIs(req, cfg);
+  res.json({
+    db: true, override: !!override, role: who.role, approved: who.approved, full: who.full,
+    config: who.full ? cfg : publicConfig(cfg), // 승인되지 않은 사람에게는 주차 내용을 뺀 설정
+    polls: await pollCounts(),
+  });
 }));
 
 /* 설문 */
@@ -227,17 +269,17 @@ api.post("/student/login", needDb, wrap(async function (req, res) {
   if (!/^\d{10}$/.test(id) || !name) return res.status(400).json({ error: "학번과 이름을 확인해 주세요.", field: "id" });
   const codeOk = room.accessCodeHash ? same(hashSecret(code), room.accessCodeHash) : (!!room.accessCode && same(code, room.accessCode));
   if (!codeOk) return res.status(401).json({ error: "수강 코드가 맞지 않습니다.", field: "code" });
-  // 명단이 하나라도 있으면 명단에 있는 학번·이름만 로그인할 수 있습니다.
+  // 수강 신청서를 내서 명단에 있는 학번·이름만 로그인할 수 있습니다.
   const hashes = room.rosterHashes || [];
-  const total = Number((await pool.query("SELECT COUNT(*) AS n FROM roster")).rows[0].n);
-  if (total || hashes.length) {
-    const row = await pool.query("SELECT name FROM roster WHERE student_id = $1", [id]);
-    const inTable = row.rows.length && row.rows[0].name === name;
-    if (!inTable && hashes.indexOf(rosterHash(id, name)) < 0) {
-      return res.status(403).json({ error: "수강생 명단에 없는 학번·이름입니다. 수강 신청서를 먼저 내 주세요.", field: "id" });
-    }
+  const row = await pool.query("SELECT name FROM roster WHERE student_id = $1", [id]);
+  const inTable = row.rows.length && row.rows[0].name === name;
+  if (!inTable && hashes.indexOf(rosterHash(id, name)) < 0) {
+    return res.status(403).json({ error: "수강생 명단에 없는 학번·이름입니다. 수강 신청서를 먼저 내 주세요.", field: "id" });
   }
-  res.json({ token: sign({ role: "student", id: id, name: name, exp: Date.now() + 30 * DAY }), id: id, name: name });
+  res.json({
+    token: sign({ role: "student", id: id, name: name, exp: Date.now() + 30 * DAY }), id: id, name: name,
+    approved: await isApproved(id, name, cfg),
+  });
 }));
 
 async function myRecords(id) {
@@ -252,9 +294,20 @@ async function myRecords(id) {
     }),
   };
 }
-api.get("/me", needDb, needStudent, wrap(async function (req, res) { res.json(await myRecords(req.student.id)); }));
+api.get("/me", needDb, needStudent, wrap(async function (req, res) {
+  const out = await myRecords(req.student.id);
+  out.approved = await isApproved(req.student.id, req.student.name, await effectiveConfig());
+  res.json(out);
+}));
+// 출석·과제 제출은 승인된 수강생만
+const needApproved = (fn) => async function (req, res) {
+  if (!(await isApproved(req.student.id, req.student.name, await effectiveConfig()))) {
+    return res.status(403).json({ error: "관리자 승인 후 이용할 수 있습니다." });
+  }
+  return fn(req, res);
+};
 
-api.post("/attendance", needDb, needStudent, wrap(async function (req, res) {
+api.post("/attendance", needDb, needStudent, wrap(needApproved(async function (req, res) {
   const cfg = await effectiveConfig();
   const week = Number(req.body.week);
   const idx = cfg.curriculum.weeks.findIndex(function (w) { return Number(w.week) === week; });
@@ -264,10 +317,10 @@ api.post("/attendance", needDb, needStudent, wrap(async function (req, res) {
   await pool.query(
     "INSERT INTO attendance (student_id, week, name, at) VALUES ($1, $2, $3, $4) ON CONFLICT (student_id, week) DO NOTHING",
     [req.student.id, week, req.student.name, Date.now()]);
-  res.json(await myRecords(req.student.id));
-}));
+  res.json(Object.assign(await myRecords(req.student.id), { approved: true }));
+})));
 
-api.post("/submissions", needDb, needStudent, wrap(async function (req, res) {
+api.post("/submissions", needDb, needStudent, wrap(needApproved(async function (req, res) {
   const cfg = await effectiveConfig();
   const week = Number(req.body.week);
   const w = cfg.curriculum.weeks.filter(function (x) { return Number(x.week) === week; })[0];
@@ -280,8 +333,8 @@ api.post("/submissions", needDb, needStudent, wrap(async function (req, res) {
   await pool.query(
     "INSERT INTO submissions (student_id, name, week, title, file_name, size, memo, late, at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     [req.student.id, req.student.name, week, str(w.assignment.title, 200), fileName, size, str(req.body.memo, 2000), !isNaN(due) && now > due, now]);
-  res.json(await myRecords(req.student.id));
-}));
+  res.json(Object.assign(await myRecords(req.student.id), { approved: true }));
+})));
 
 /* 관리자 */
 async function adminPasswordOk(password) {
@@ -321,6 +374,9 @@ api.put("/config", needDb, needAdmin, wrap(async function (req, res) {
   if (!config || !config.site || !config.hero || !config.curriculum || !Array.isArray(config.curriculum.weeks)) {
     return res.status(400).json({ error: "설정 내용이 올바르지 않습니다." });
   }
+  if (config.curriculum.weeks.some(function (w) { return w && w.locked; })) {
+    return res.status(409).json({ error: "주차 내용을 불러오지 못한 상태입니다. 새로 고친 뒤 다시 저장해 주세요." });
+  }
   await saveOverride(config);
   res.json({ ok: true });
 }));
@@ -337,7 +393,7 @@ api.post("/admin/poll/clear", needDb, needAdmin, wrap(async function (req, res) 
 
 /* 수강생 명단 */
 api.get("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
-  const r = await pool.query("SELECT student_id, name, department, grade, email, phone, source, created_at FROM roster ORDER BY created_at, student_id");
+  const r = await pool.query("SELECT student_id, name, department, grade, email, phone, source, created_at, approved FROM roster ORDER BY created_at, student_id");
   const att = await pool.query("SELECT student_id, COUNT(*) AS n FROM attendance GROUP BY student_id");
   const sub = await pool.query("SELECT student_id, COUNT(*) AS n FROM submissions GROUP BY student_id");
   const attN = {}, subN = {};
@@ -347,7 +403,7 @@ api.get("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
     roster: r.rows.map(function (x) {
       return {
         id: x.student_id, name: x.name, department: x.department, grade: x.grade, email: x.email, phone: x.phone,
-        source: x.source, at: Number(x.created_at), attendance: attN[x.student_id] || 0, submissions: subN[x.student_id] || 0,
+        source: x.source, at: Number(x.created_at), approved: !!x.approved, attendance: attN[x.student_id] || 0, submissions: subN[x.student_id] || 0,
       };
     }),
   });
@@ -361,6 +417,15 @@ api.post("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
     if (!exists && (await enroll(st || {}, "admin"))) added++; else skipped++;
   }
   res.json({ added: added, skipped: skipped });
+}));
+// 승인 / 승인 취소
+api.post("/admin/roster/:id/approve", needDb, needAdmin, wrap(async function (req, res) {
+  await pool.query("UPDATE roster SET approved = $1 WHERE student_id = $2", [req.body.approved !== false, str(req.params.id, 20)]);
+  res.json({ ok: true });
+}));
+api.post("/admin/roster-approve-all", needDb, needAdmin, wrap(async function (req, res) {
+  await pool.query("UPDATE roster SET approved = $1", [true]);
+  res.json({ ok: true });
 }));
 api.delete("/admin/roster/:id", needDb, needAdmin, wrap(async function (req, res) {
   await pool.query("DELETE FROM roster WHERE student_id = $1", [str(req.params.id, 20)]);
@@ -391,6 +456,12 @@ app.use("/api", function (req, res, next) { res.set("Cache-Control", "no-store")
 const PUBLIC_FILES = ["index.html", "config.js", "app.js", "admin.js", "styles.css", "AI_WEB_매뉴얼.html"];
 const noCache = function (res) { res.set("Cache-Control", "no-cache"); }; // 고친 파일이 바로 보이도록 매번 확인
 app.get("/", function (req, res) { noCache(res); res.sendFile(path.join(ROOT, "index.html")); });
+app.get("/config.js", function (req, res, next) {
+  if (!pool) return next(); // DB가 없으면(승인 기능 없음) 원본 그대로
+  noCache(res);
+  res.type("application/javascript; charset=utf-8")
+    .send("/* 주차별 학습 내용은 승인된 수강생에게만 서버가 따로 보냅니다. */\nwindow.SITE_CONFIG = " + JSON.stringify(publicConfig(BASE_CONFIG)) + ";\n");
+});
 PUBLIC_FILES.forEach(function (name) {
   app.get("/" + encodeURI(name), function (req, res) { noCache(res); res.sendFile(path.join(ROOT, name)); });
 });

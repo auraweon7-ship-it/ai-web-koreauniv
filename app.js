@@ -11,7 +11,14 @@
   if (location.protocol === "file:" || !window.fetch) return start(null);
   var started = false;
   var giveUp = setTimeout(function () { if (!started) { started = true; start(null); } }, 5000);
-  fetch("api/state", { cache: "no-store" })
+  var bootHeaders = {};
+  try {
+    var bootAdmin = JSON.parse(localStorage.getItem("kucourse:adminLogin") || "null");
+    var bootUser = JSON.parse(localStorage.getItem("kucourse:session") || "null");
+    var bootToken = (bootAdmin && bootAdmin.token && Date.now() < bootAdmin.until && bootAdmin.token) || (bootUser && bootUser.token);
+    if (bootToken) bootHeaders.Authorization = "Bearer " + bootToken;
+  } catch (e) { /* 토큰 없이 진행 */ }
+  fetch("api/state", { cache: "no-store", headers: bootHeaders })
     .then(function (res) { return res.ok ? res.json() : null; })
     .catch(function () { return null; })
     .then(function (remote) {
@@ -112,9 +119,16 @@
   var override = store.get("config", null);
   var usingOverride = !!(override && override.base === baseStamp && override.data);
   var C = usingOverride ? override.data : BASE;
-  if (REMOTE) { // 서버에 저장된 수정본이 있으면 그것을, 없으면 config.js 원본을 씁니다.
-    usingOverride = !!remote.config;
+  var FULL = !REMOTE; // 주차별 학습 내용을 볼 수 있는지(서버 없이 쓸 때는 항상 가능)
+  if (REMOTE) { // 서버가 내 권한에 맞춰 보내 준 설정을 씁니다.
+    usingOverride = !!remote.override;
     C = remote.config || BASE;
+    FULL = !!remote.full;
+    // 서버가 인정하지 않는 로그인 기록은 지웁니다(기한 만료 등).
+    if (store.get("adminLogin", null) && remote.role !== "admin") store.set("adminLogin", null);
+    var bootSession = store.get("session", null);
+    if (bootSession && remote.role === null) store.set("session", null);
+    else if (bootSession && remote.role === "student") { bootSession.approved = !!remote.approved; store.set("session", bootSession); }
   }
   C.notices = C.notices || { title: "공지사항", items: [] };
   C.admin = C.admin || { passwordHash: "" };
@@ -377,6 +391,21 @@
   }
   buildEventMap();
 
+  // 승인받지 않은 사람에게 주차 내용 대신 보여 주는 안내
+  function lockedBox() {
+    var me = store.get("session", null);
+    return h("div", { class: "locked-box" }, [
+      h("b", {}, "🔒 승인된 수강생만 볼 수 있습니다"),
+      h("p", {}, me
+        ? "수강 신청은 접수되었고 관리자 승인을 기다리는 중입니다. 승인되면 학습 내용·강의 자료·참고 영상·과제가 보입니다."
+        : "수강 신청서를 내고 관리자 승인을 받은 뒤 '내 강의실'에 로그인하면 학습 내용·강의 자료·참고 영상·과제가 보입니다."),
+      me ? null : h("div", { class: "meta-row" }, [
+        h("a", { class: "btn btn-primary btn-sm", href: "#apply" }, "수강 신청"),
+        h("a", { class: "btn btn-ghost btn-sm", href: "#classroom" }, "내 강의실 로그인"),
+      ]),
+    ]);
+  }
+
   function dotList(items) {
     return h("ul", { class: "dot-list" }, items.map(function (t) { return h("li", {}, t); }));
   }
@@ -471,10 +500,10 @@
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "🗓️"), h("b", {}, "날짜·시간"), fmtDate(w._date) + " " + w._time]),
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "📍"), h("b", {}, "장소"), w._place]),
         ]),
-        h("div", {}, [h("h4", {}, "학습 내용"), dotList(w.topics)]),
-        materialsBlock(w),
-        videosBlock(w),
-        w.assignment ? assignmentBox(w) : null,
+        w.locked ? lockedBox() : h("div", {}, [h("h4", {}, "학습 내용"), dotList(w.topics || [])]),
+        w.locked ? null : materialsBlock(w),
+        w.locked ? null : videosBlock(w),
+        w.locked || !w.assignment ? null : assignmentBox(w),
       ]),
     ]);
   }));
@@ -493,6 +522,7 @@
 
   var curEl = section(cur, [
     h("h3", { class: "sub-title reveal", id: "weeks-title" }, cur.weeksTitle),
+    FULL ? null : notice("주차별 학습 내용은 관리자가 승인한 수강생에게만 공개됩니다. 주차 제목과 일정만 표시됩니다."),
     weekList,
     h("h3", { class: "sub-title gap-top reveal", id: "calendar" }, cur.calendarTitle),
     h("div", { class: "cal-wrap reveal" }, [
@@ -552,7 +582,7 @@
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "⏰"), w._time]),
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "📍"), w._place]),
         ]),
-        dotList(w.topics),
+        w.locked ? h("p", { class: "cal-note" }, "🔒 학습 내용은 승인된 수강생만 볼 수 있습니다.") : dotList(w.topics || []),
         w.assignment ? h("p", { class: "cal-note" }, "📝 과제: " + w.assignment.title + " (마감 " + fmtDateTime(w._due) + ")") : null,
         more,
       ].forEach(function (el) { if (el) calDetail.appendChild(el); });
@@ -1010,7 +1040,7 @@
         h("div", { class: "done-icon", "aria-hidden": "true" }, "✓"),
         h("h4", {}, apply.successTitle),
         h("p", {}, apply.successText),
-        REMOTE ? h("p", { class: "done-meta" }, "수강생 명단에 등록되었습니다. 같은 학번·이름과 수강 코드로 '내 강의실'에 로그인할 수 있습니다.") : null,
+        REMOTE ? h("p", { class: "done-meta" }, "관리자가 승인하면 주차별 학습 내용을 볼 수 있습니다. 승인 뒤 같은 학번·이름과 수강 코드로 '내 강의실'에 로그인해 주세요.") : null,
         h("p", { class: "done-meta" }, saved.name + " (" + saved.studentId + ") · " + fmtStamp(saved.at)),
         again,
       ]));
@@ -1060,6 +1090,12 @@
     sub[me.id] = res.submissions || [];
     store.set("attendance", att);
     store.set("submissions", sub);
+    // 방금 승인되었으면(또는 승인이 취소되었으면) 권한에 맞는 내용을 다시 받아 옵니다.
+    if ("approved" in res && !!res.approved !== !!me.approved) {
+      me.approved = !!res.approved;
+      store.set("session", me);
+      return location.reload();
+    }
     renderRoom();
   }
   function syncMine() {
@@ -1087,9 +1123,9 @@
           if (REMOTE) { // 서버가 수강 코드와 명단을 확인합니다.
             return call("POST", "student/login", { id: values.id, name: values.name, code: values.code })
               .then(function (res) {
-                store.set("session", { id: res.id, name: res.name, token: res.token });
-                renderRoom(); updatePoll();
-                syncMine();
+                store.set("session", { id: res.id, name: res.name, token: res.token, approved: !!res.approved });
+                location.hash = "#" + room.id;
+                location.reload();
               })
               .catch(function (err) { api.fail(err.field === "id" ? "id" : "code", err.message); });
           }
@@ -1117,7 +1153,11 @@
     }
 
     var logout = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "로그아웃");
-    logout.addEventListener("click", function () { store.set("session", null); renderRoom(); updatePoll(); });
+    logout.addEventListener("click", function () {
+      store.set("session", null);
+      if (REMOTE) { location.hash = "#" + room.id; return location.reload(); } // 잠긴 내용으로 되돌리기
+      renderRoom(); updatePoll();
+    });
 
     /* 출석 */
     var allAtt = store.get("attendance", {});
@@ -1201,10 +1241,21 @@
       })) : h("p", { class: "cal-empty" }, "아직 제출한 과제가 없습니다."),
     ]);
 
+    var waiting = REMOTE && !me.approved;
     roomBox.appendChild(h("div", { class: "card room-bar" }, [
-      h("div", {}, [h("b", {}, me.name + "님"), h("span", { class: "sub-meta" }, " · 학번 " + me.id)]),
+      h("div", {}, [
+        h("b", {}, me.name + "님"), h("span", { class: "sub-meta" }, " · 학번 " + me.id),
+        REMOTE ? h("span", { class: "tag " + (waiting ? "" : "tag-assign") }, waiting ? "승인 대기" : "승인됨") : null,
+      ]),
       logout,
     ]));
+    if (waiting) {
+      roomBox.appendChild(h("div", { class: "card locked-box" }, [
+        h("b", {}, "⏳ 관리자 승인을 기다리는 중입니다"),
+        h("p", {}, "승인되면 주차별 학습 내용을 볼 수 있고, 출석 체크와 과제 제출도 할 수 있습니다. 승인 뒤에는 이 화면을 새로 고쳐 주세요."),
+      ]));
+      return;
+    }
     roomBox.appendChild(h("div", { class: "grid grid-2 room-grid" }, [attCard, subCard]));
   }
 
@@ -1536,7 +1587,7 @@
   /* ── 관리자 모드(admin.js)와 함께 쓰는 것들 ── */
   window.KU = {
     h: h, store: store, makeForm: makeForm, config: C, baseStamp: baseStamp, usingOverride: usingOverride,
-    remote: REMOTE, call: call, toast: showToast,
+    remote: REMOTE, full: FULL, call: call, toast: showToast,
     setPollCounts: function (polls) { if (REMOTE) { remoteCounts = polls || {}; updatePoll(); } },
     hashSecret: hashSecret, rosterHash: rosterHash, sha256: sha256, weeks: weeks,
     fmtDateTime: fmtDateTime, fmtShort: fmtShort, driveId: driveId, youtubeId: youtubeId,

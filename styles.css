@@ -1146,3 +1146,11 @@ body.is-admin .folio-add.admin-only { display: grid !important; }
 .mx-late { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--pink-100); color: #b96b00; font-weight: 700; font-size: 13px; }
 .mx-no { color: #b9b8b0; font-size: 13px; }
 .mx-time { display: block; margin-top: 2px; font-size: 11px; color: var(--ink-soft); }
+
+/* ── 승인 전 잠금 안내, 승인 버튼 ── */
+.locked-box { display: grid; gap: 8px; padding: 18px; border-radius: var(--radius-sm); background: var(--pink-50); border: 1px dashed var(--pink-400); }
+.locked-box p { color: var(--ink-soft); font-size: 15px; }
+.card.locked-box { border: 1px dashed var(--pink-400); }
+.ad-mini.approve { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.ad-mini.approve:hover { background: #0e7059; }
+.room-bar .tag { margin-left: 8px; }

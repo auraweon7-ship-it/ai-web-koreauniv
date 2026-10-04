@@ -589,6 +589,7 @@
       location.reload();
     }
     if (REMOTE) { // 서버(DB)에 저장 → 모든 방문자에게 바로 반영
+      if (!KU.full) { KU.toast("전체 내용을 불러오지 못했습니다. 새로 고친 뒤 다시 해 주세요."); return Promise.resolve(); }
       dirty = false;
       updateStatus();
       return adminCall("PUT", "config", { config: clone(draft) }).then(after, function () { dirty = true; updateStatus(); });
@@ -697,7 +698,9 @@
           if (REMOTE) {
             return KU.call("POST", "admin/setup", { password: v.pw }).then(function (res) {
               draft.admin.passwordHash = C.admin.passwordHash = res.passwordHash;
-              setAdmin(true, res.token); close(); openPanel("security");
+              setAdmin(true, res.token); close();
+              try { sessionStorage.setItem(SESSION_KEY + ":open", "1"); } catch (e) { /* 무시 */ }
+              location.reload();
             }).catch(function (err) {
               if (err.status === 409) { askLogin = true; close(); return onLock(); } // 이미 비밀번호가 있음 → 로그인 창으로
               api.fail("pw", err.message);
@@ -713,7 +716,9 @@
       ], "들어가기", function (v, api) {
         if (REMOTE) { // 서버가 비밀번호를 확인하고 로그인 토큰을 줍니다.
           return KU.call("POST", "admin/login", { password: v.pw }).then(function (res) {
-            setAdmin(true, res.token); close(); openPanel();
+            setAdmin(true, res.token); close();
+            try { sessionStorage.setItem(SESSION_KEY + ":open", "1"); } catch (e) { /* 무시 */ }
+            location.reload(); // 관리자 권한으로 전체 내용을 다시 받아 옵니다.
           }).catch(function (err) { api.fail("pw", err.message); });
         }
         if (Date.now() < lockUntil) return api.fail("pw", "여러 번 틀렸습니다. 30초 뒤 다시 시도해 주세요.");
@@ -1218,9 +1223,16 @@
       reader.readAsText(file.files[0]);
     });
 
-    var head = ["번호", "학번", "이름", "소속 학과", "학년", "이메일", "연락처", "등록 경로", "등록일", "출석", "과제 제출", "삭제"];
+    var head = ["번호", "학번", "이름", "승인 상태", "승인", "소속 학과", "학년", "이메일", "연락처", "등록 경로", "등록일", "출석", "과제 제출", "삭제"];
+    var approvedN = rows.filter(function (r) { return r.approved; }).length;
+    function setApproved(r, on) {
+      adminCall("POST", "admin/roster/" + encodeURIComponent(r.id) + "/approve", { approved: on }).then(function () {
+        rosterMsg = r.name + (on ? " 승인" : " 승인 취소");
+        loadRoster();
+      }, function () {});
+    }
     return [
-      note("수강 신청서를 낸 사람은 자동으로 이 명단에 등록됩니다. 명단에 한 명이라도 있으면 명단에 있는 학번·이름만 '내 강의실'에 로그인할 수 있습니다(수강 코드도 필요). 명단이 비어 있으면 수강 코드만 맞으면 됩니다."),
+      note("수강 신청서를 낸 사람이 '승인 대기'로 이 표에 나타납니다. '승인'을 누르면 그 수강생이 내 강의실에 로그인해 주차별 학습 내용을 보고 출석·과제 제출을 할 수 있습니다. 승인받지 않은 사람과 로그인하지 않은 방문자에게는 주차 제목과 일정만 보입니다."),
       msg ? h("p", { class: "also-done", role: "status" }, msg) : null,
       h("div", { class: "card ad-card" }, [
         h("div", { class: "ad-row between" }, [
@@ -1228,22 +1240,30 @@
           h("span", { class: "ad-row" }, [
             button("새로 고침", "btn btn-ghost btn-sm", function () { loadRoster(); }),
             button("엑셀용 파일(CSV) 내려받기", "btn btn-ghost btn-sm", function () {
-              download("수강생_명단.csv", toCsv(head.slice(0, 11), rows.map(function (r, i) {
-                return [i + 1, r.id, r.name, r.department, r.grade, r.email, r.phone, r.source === "apply" ? "수강 신청" : "관리자 등록", stamp(r.at), r.attendance + "/" + totalWeeks, r.submissions];
+              var csvHead = head.filter(function (x) { return x !== "승인" && x !== "삭제"; });
+              download("수강생_명단.csv", toCsv(csvHead, rows.map(function (r, i) {
+                return [i + 1, r.id, r.name, r.approved ? "승인됨" : "승인 대기", r.department, r.grade, r.email, r.phone, r.source === "apply" ? "수강 신청" : "관리자 등록", stamp(r.at), r.attendance + "/" + totalWeeks, r.submissions];
               })), "text/csv");
+            }),
+            button("대기 중 모두 승인", "btn btn-ghost btn-sm", function () {
+              adminCall("POST", "admin/roster-approve-all", {}).then(function () { rosterMsg = "대기 중인 수강생을 모두 승인했습니다."; loadRoster(); }, function () {});
             }),
             confirmButton("명단 모두 지우기", "btn btn-ghost btn-sm", function () {
               adminCall("DELETE", "admin/roster").then(function () { rosterMsg = "명단을 모두 지웠습니다."; loadRoster(); }, function () {});
             }),
           ]),
         ]),
-        h("p", { class: "field-hint" }, "수강 신청으로 등록 " + byApply + "명 · 관리자가 등록 " + (rows.length - byApply) + "명"),
+        h("p", { class: "field-hint" }, "승인됨 " + approvedN + "명 · 승인 대기 " + (rows.length - approvedN) + "명"),
         rows.length ? h("div", { class: "ad-table-wrap" }, [
           h("table", { class: "ad-table" }, [
             h("thead", {}, [h("tr", {}, head.map(function (x) { return h("th", {}, x); }))]),
             h("tbody", {}, rows.map(function (r, i) {
               return h("tr", {}, [
                 h("td", {}, i + 1), h("td", {}, r.id), h("td", {}, r.name),
+                h("td", {}, [h("span", { class: "tag" + (r.approved ? " tag-assign" : "") }, r.approved ? "승인됨" : "승인 대기")]),
+                h("td", {}, [r.approved
+                  ? button("승인 취소", "ad-mini", function () { setApproved(r, false); })
+                  : button("✔ 승인", "ad-mini approve", function () { setApproved(r, true); })]),
                 h("td", {}, r.department || "—"), h("td", {}, r.grade || "—"), h("td", {}, r.email || "—"), h("td", {}, r.phone || "—"),
                 h("td", {}, [h("span", { class: "tag" + (r.source === "apply" ? " tag-assign" : "") }, r.source === "apply" ? "수강 신청" : "관리자 등록")]),
                 h("td", {}, stamp(r.at)),
@@ -1256,39 +1276,6 @@
             })),
           ]),
         ]) : h("p", { class: "cal-empty" }, "아직 등록된 수강생이 없습니다. 수강 신청서가 들어오면 여기에 나타납니다."),
-      ]),
-      h("div", { class: "grid grid-2 ad-grid" }, [
-        h("div", { class: "card ad-card" }, [
-          h("h4", {}, "한 명 추가"),
-          makeForm([
-            { name: "id", label: "학번", type: "text", required: true, pattern: "^\\d{10}$", patternMsg: "학번은 숫자 10자리로 입력해 주세요." },
-            { name: "name", label: "이름", type: "text", required: true },
-          ], "명단에 추가", function (v, api) {
-            if (rows.some(function (r) { return r.id === v.id; })) return api.fail("id", "이미 등록된 학번입니다.");
-            addMany([{ id: v.id, name: v.name }]);
-          }),
-        ]),
-        h("div", { class: "card ad-card" }, [
-          h("h4", {}, "여러 명 한꺼번에"),
-          h("p", { class: "field-hint" }, "한 줄에 한 명씩 '학번, 이름'. 엑셀에서 두 열을 복사해 붙여도 됩니다."),
-          bulk,
-          h("div", { class: "ad-row" }, [
-            button("붙여 넣은 명단 추가", "btn btn-primary btn-sm", function () { addMany(parseLines(bulk.value)); }),
-            h("label", { class: "ad-file" }, ["CSV 파일로 추가 ", file]),
-          ]),
-        ]),
-      ]),
-      h("div", { class: "card ad-card" }, [
-        h("h4", {}, "수강 코드 바꾸기"),
-        h("p", { class: "field-hint" }, "수강생이 로그인할 때 쓰는 공용 코드입니다. 바꾼 뒤 위쪽 '저장하고 적용'을 눌러 주세요."),
-        makeForm([
-          { name: "code", label: "새 수강 코드", type: "text", required: true, pattern: "^.{4,}$", patternMsg: "4자 이상으로 입력해 주세요." },
-        ], "수강 코드 변경", function (v) {
-          draft.classroom.accessCodeHash = KU.hashSecret(v.code);
-          delete draft.classroom.accessCode;
-          rosterFresh = true;
-          markDirty(); showTab("roster");
-        }),
       ]),
     ];
   }
@@ -1581,7 +1568,10 @@
             h("span", { class: "ad-row" }, [
               saveBtn,
               button("사이트 보기", "btn btn-ghost btn-sm", closePanel),
-              button("로그아웃", "btn btn-ghost btn-sm", function () { setAdmin(false); closePanel(); }),
+              button("로그아웃", "btn btn-ghost btn-sm", function () {
+                setAdmin(false); closePanel();
+                if (REMOTE) location.reload(); // 방문자용 내용으로 되돌리기
+              }),
             ]),
           ]),
           h("div", { class: "container" }, [tabBar]),
