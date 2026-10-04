@@ -202,6 +202,11 @@
     }, headerCta.label));
   }
 
+  // 우측 상단 수강생 로그인 버튼 (로그인하면 이름이 표시됩니다 → renderStudentBar)
+  var headerLogin = h("button", { class: "header-login", type: "button" }, "로그인");
+  headerLogin.addEventListener("click", function () { openStudent(null); });
+  document.querySelector(".header-inner").appendChild(headerLogin);
+
   var nav = document.getElementById("siteNav");
   C.nav.forEach(function (item) {
     nav.appendChild(h("a", { href: "#" + item.id, "data-target": item.id }, item.label));
@@ -1112,7 +1117,7 @@
         h("div", { class: "done-icon", "aria-hidden": "true" }, "✓"),
         h("h4", {}, apply.successTitle),
         h("p", {}, apply.successText),
-        REMOTE ? h("p", { class: "done-meta" }, "관리자가 승인하면 주차별 학습 내용을 볼 수 있습니다. 승인 뒤 같은 학번·이름과 수강 코드로 '내 강의실'에 로그인해 주세요.") : null,
+        REMOTE ? h("p", { class: "done-meta" }, "관리자가 승인하면 주차별 학습 내용을 볼 수 있습니다. 승인 뒤 화면 오른쪽 위 '로그인'에서 같은 학번·이름으로 로그인해 주세요.") : null,
         h("p", { class: "done-meta" }, saved.name + " (" + saved.studentId + ") · " + fmtStamp(saved.at)),
         again,
       ]));
@@ -1195,6 +1200,9 @@
   function renderStudentBar() {
     studentBar.textContent = "";
     var me = store.get("session", null);
+    headerLogin.textContent = me ? "👤 " + me.name : "로그인";
+    headerLogin.classList.toggle("on", !!me);
+    headerLogin.title = me ? "내 정보·제출 내역·로그아웃" : "수강생 로그인";
     if (!me) {
       var login = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "수강생 로그인");
       login.addEventListener("click", function () { openStudent(null); });
@@ -1306,21 +1314,18 @@
       head("🔐", "수강생 로그인", w ? w.week + "주차 과제를 제출하려면 먼저 로그인해 주세요." : "로그인하면 출석을 체크하고 과제를 제출할 수 있습니다.");
       box.appendChild(makeForm([
         { name: "id", label: "학번", type: "text", required: true, placeholder: "숫자 10자리", pattern: "^\\d{10}$", patternMsg: "학번은 숫자 10자리로 입력해 주세요." },
-        { name: "name", label: "이름", type: "text", required: true, placeholder: "홍길동" },
-        { name: "code", label: "수강 코드", type: "password", required: true, wide: true, hint: "첫 수업에서 안내받은 코드를 입력하세요." },
+        { name: "name", label: "이름", type: "text", required: true, placeholder: "홍길동", hint: "수강 신청서에 적은 학번과 이름을 입력하세요." },
       ], "로그인", function (values, api) {
-        if (REMOTE) { // 서버가 수강 코드와 명단을 확인합니다.
-          return call("POST", "student/login", { id: values.id, name: values.name, code: values.code })
+        if (REMOTE) { // 서버가 명단(수강 신청자)에 있는 학번·이름인지 확인합니다.
+          return call("POST", "student/login", { id: values.id, name: values.name })
             .then(function (res) {
               store.set("session", { id: res.id, name: res.name, token: res.token, approved: !!res.approved });
               if (w) store.set("openAssign", w.week); // 새로 고친 뒤 제출 창을 이어서 엽니다.
               location.hash = w ? "#week-" + w.week : "#weeks-title";
               location.reload();
             })
-            .catch(function (err) { api.fail(err.field === "id" ? "id" : "code", err.message); });
+            .catch(function (err) { api.fail("id", err.message); });
         }
-        var codeOk = room.accessCodeHash ? hashSecret(values.code) === room.accessCodeHash : values.code === room.accessCode;
-        if (!codeOk) return api.fail("code", "수강 코드가 맞지 않습니다.");
         // 관리자가 명단을 등록했다면 명단에 있는 학번·이름만 들어올 수 있습니다.
         if (room.rosterHashes.length && room.rosterHashes.indexOf(rosterHash(values.id, values.name)) < 0) {
           return api.fail("id", "수강생 명단에 없는 학번·이름입니다.");

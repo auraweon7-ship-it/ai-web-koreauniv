@@ -12,7 +12,7 @@ window.SITE_CONFIG = {
     university: "고려대학교",
     department: "○○학과",
     courseTitle: "AI WEB",
-    version: "v1.3.1", // 제목 오른쪽에 빨간 글씨로 표시. 비워 두면 표시하지 않습니다.
+    version: "v1.4.0", // 제목 오른쪽에 빨간 글씨로 표시. 비워 두면 표시하지 않습니다.
     logoImage: "images/logo.webp", // 로고 이미지 경로. 비워 두면 아래 이모지가 로고로 쓰입니다.
     logoEmoji: "🌸",
     // 첫 화면·브라우저 탭의 제목 옆에 붙는 소속 줄. 비워 두면 위의 "대학교 학과"가 표시됩니다.

@@ -286,10 +286,9 @@ api.post("/student/login", needDb, wrap(async function (req, res) {
   if (tooMany(req)) return res.status(429).json({ error: "여러 번 시도했습니다. 잠시 뒤 다시 해 주세요." });
   const cfg = await effectiveConfig();
   const room = cfg.classroom || {};
-  const id = str(req.body.id, 20).trim(), name = str(req.body.name, 40).trim(), code = str(req.body.code, 100);
+  const id = str(req.body.id, 20).trim(), name = str(req.body.name, 40).trim();
   if (!/^\d{10}$/.test(id) || !name) return res.status(400).json({ error: "학번과 이름을 확인해 주세요.", field: "id" });
-  const codeOk = room.accessCodeHash ? same(hashSecret(code), room.accessCodeHash) : (!!room.accessCode && same(code, room.accessCode));
-  if (!codeOk) return res.status(401).json({ error: "수강 코드가 맞지 않습니다.", field: "code" });
+  // 학번과 이름만으로 로그인합니다(수강 코드는 쓰지 않습니다).
   // 수강 신청서를 내서 명단에 있는 학번·이름만 로그인할 수 있습니다.
   const hashes = room.rosterHashes || [];
   const row = await pool.query("SELECT name FROM roster WHERE student_id = $1", [id]);
