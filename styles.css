@@ -79,6 +79,13 @@ ul { margin: 0; padding: 0; list-style: none; }
   flex: none; width: 40px; height: 40px; display: grid; place-items: center;
   border-radius: 14px; background: linear-gradient(135deg, var(--pink-100), var(--purple-100)); font-size: 20px;
 }
+/* 제목 오른쪽 버전 표시 (빨간 글씨) */
+.ver {
+  color: #e02424; -webkit-text-fill-color: #e02424; background: none;
+  font-family: "Noto Sans KR", sans-serif; font-weight: 700; letter-spacing: 0; white-space: nowrap;
+}
+.brand-title .ver { font-size: 11px; margin-left: 6px; vertical-align: 0.5em; }
+.hero h1 .ver { font-size: 0.3em; margin-left: 0.35em; vertical-align: 1.5em; }
 /* 로고 이미지: 둥글게 잘라 흰 여백을 감춥니다 */
 .brand-logo.has-img, .modal-emoji.has-img { background: none; border-radius: 50%; overflow: hidden; }
 .brand-logo.has-img { width: 44px; height: 44px; }

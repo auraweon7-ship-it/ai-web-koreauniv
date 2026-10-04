@@ -606,7 +606,7 @@
     ["welcome", "첫 방문 효과"], ["footer", "맨 아래 문구"], ["nav", "헤더 메뉴"],
   ];
   var LABELS = {
-    university: "대학교", department: "학과", courseTitle: "강의 제목", logoEmoji: "로고 이모지", logoImage: "로고 이미지 경로", brandSub: "제목 옆 소속 줄(첫 화면·탭)", headerSub: "헤더 제목 윗줄",
+    university: "대학교", department: "학과", courseTitle: "강의 제목", logoEmoji: "로고 이모지", version: "버전(제목 오른쪽 빨간 글씨)", logoImage: "로고 이미지 경로", brandSub: "제목 옆 소속 줄(첫 화면·탭)", headerSub: "헤더 제목 윗줄",
     id: "연결 ID (바꾸지 마세요)", label: "이름", badge: "배지 문구", subtitle: "부제", description: "설명",
     buttons: "버튼", href: "연결 주소", primary: "강조 버튼", quickInfo: "한눈에 보기", icon: "아이콘", value: "값",
     suffix: "단위", eyebrow: "작은 영문 제목", title: "제목", lead: "소개 문구", slides: "슬라이드", text: "내용",

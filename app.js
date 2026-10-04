@@ -133,7 +133,7 @@
   if (site.logoImage) document.head.appendChild(h("link", { rel: "icon", href: site.logoImage }));
   brand.appendChild(h("span", { class: "brand-text" }, [
     h("span", { class: "brand-sub" }, site.headerSub || orgLine),
-    h("span", { class: "brand-title" }, courseName),
+    h("span", { class: "brand-title" }, [courseName, site.version ? h("span", { class: "ver" }, site.version) : null]),
   ]));
 
   var nav = document.getElementById("siteNav");
@@ -147,7 +147,7 @@
     h("div", { class: "container" }, [
       h("span", { class: "hero-badge" }, hero.badge),
       h("p", { class: "hero-dept" }, orgLine),
-      h("h1", {}, courseName),
+      h("h1", {}, [courseName, site.version ? h("span", { class: "ver" }, site.version) : null]),
       h("p", { class: "hero-subtitle" }, hero.subtitle),
       h("p", { class: "hero-desc" }, hero.description),
       h("div", { class: "hero-actions" }, hero.buttons.map(function (b) {
