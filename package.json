@@ -1,6 +1,6 @@
 {
   "name": "ai-web-koreauniv",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "AI WEB 강의 소개 사이트 (정적 파일 + PostgreSQL 저장 API)",
   "main": "server.js",
