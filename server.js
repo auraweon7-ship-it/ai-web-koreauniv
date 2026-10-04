@@ -87,6 +87,8 @@ function loadBaseConfig() {
   return sandbox.window.SITE_CONFIG;
 }
 const BASE_CONFIG = loadBaseConfig();
+// 사이트 버전: package.json의 version이 기준입니다. (제목 옆에 표시)
+const VERSION = "v" + require("./package.json").version;
 
 async function getOverride() {
   const r = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["config"]);
@@ -228,7 +230,7 @@ api.get("/state", wrap(async function (req, res) {
   const cfg = override || BASE_CONFIG;
   const who = await whoIs(req, cfg);
   res.json({
-    db: true, override: !!override, role: who.role, approved: who.approved, full: who.full,
+    db: true, version: VERSION, override: !!override, role: who.role, approved: who.approved, full: who.full,
     config: who.full ? cfg : publicConfig(cfg), // 승인되지 않은 사람에게는 주차 내용을 뺀 설정
     polls: await pollCounts(),
   });

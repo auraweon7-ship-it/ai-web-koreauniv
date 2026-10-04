@@ -177,7 +177,41 @@
     });
     var saved = false;
     render();
-    close = dialog(isNew ? "주차 추가" : (w.week + "주차 수정"), "", h("div", { class: "guide-edit" }, [alertBox, editorBox, save]), "🗓️");
+    // 구글 드라이브 주소 첨부: 주소를 붙여 넣고 '첨부'를 누르면 강의 자료 목록에 바로 들어갑니다.
+    var driveUrl = h("input", { type: "url", placeholder: "https://drive.google.com/…  (공유 링크 붙여 넣기)", "aria-label": "구글 드라이브 주소" });
+    var driveLabel = h("input", { type: "text", placeholder: "자료 이름 (예: 3주차 강의안)", "aria-label": "자료 이름" });
+    var driveTip = h("small", { class: "ed-tip" });
+    var driveList = h("ul", { class: "drive-attached" });
+    function showAttached() {
+      driveList.textContent = "";
+      w.materials.forEach(function (m, i) {
+        if (!m || !String(m.url || "").trim()) return;
+        var link = h("a", { href: m.url, target: "_blank", rel: "noopener" }, "📄 " + (m.label || "강의 자료 " + (i + 1)));
+        var del = button("삭제", "ad-mini", function () { w.materials.splice(i, 1); render(); showAttached(); });
+        driveList.appendChild(h("li", {}, [link, del]));
+      });
+      driveList.hidden = !driveList.children.length;
+    }
+    function attachDrive() {
+      var url = driveUrl.value.trim();
+      if (!url) { driveTip.className = "ed-tip bad"; driveTip.textContent = "구글 드라이브 주소를 붙여 넣어 주세요."; return; }
+      if (!KU.driveId(url)) { driveTip.className = "ed-tip bad"; driveTip.textContent = "구글 드라이브 주소가 아닙니다. (drive.google.com 또는 docs.google.com)"; return; }
+      if (w.materials.some(function (m) { return m && String(m.url || "").trim() === url; })) { driveTip.className = "ed-tip bad"; driveTip.textContent = "이미 첨부한 주소입니다."; return; }
+      w.materials = w.materials.filter(function (m) { return m && String(m.url || "").trim(); });
+      w.materials.push({ label: driveLabel.value.trim() || "강의 자료 " + (w.materials.length + 1), url: url });
+      driveUrl.value = ""; driveLabel.value = "";
+      driveTip.className = "ed-tip ok"; driveTip.textContent = "✓ 첨부했습니다. 아래 '저장'을 눌러야 반영됩니다.";
+      render(); showAttached();
+    }
+    driveUrl.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); attachDrive(); } });
+    var driveBox = h("div", { class: "drive-attach" }, [
+      h("b", {}, "📎 구글 드라이브 주소 첨부"),
+      h("small", {}, "구글 드라이브에서 파일 → 공유 → '링크가 있는 모든 사용자'로 바꾼 뒤 링크를 복사해 붙여 넣으세요."),
+      h("div", { class: "drive-attach-row" }, [driveLabel, driveUrl, button("첨부", "btn btn-primary", attachDrive)]),
+      driveTip, driveList,
+    ]);
+    showAttached();
+    close = dialog(isNew ? "주차 추가" : (w.week + "주차 수정"), "", h("div", { class: "guide-edit" }, [alertBox, driveBox, editorBox, save]), "🗓️");
     var backs = document.querySelectorAll(".modal-backdrop");
     backs[backs.length - 1].querySelector(".modal").classList.add("modal-wide");
   }
@@ -767,7 +801,7 @@
     events: "달력 일정", student: "학생 표시 이름", term: "학기·과제 구분", driveUrl: "구글 드라이브 주소", emptyText: "비었을 때 문구",
     address: "주소", copyright: "저작권 문구", pinned: "중요 표시", links: "링크",
   };
-  var HIDE = { rosterHashes: 1, accessCodeHash: 1, accessCode: 1, passwordHash: 1 };
+  var HIDE = { rosterHashes: 1, accessCodeHash: 1, accessCode: 1, passwordHash: 1, version: 1, locked: 1 };
   var ONE_LINE = { url: 1, href: 1, driveUrl: 1, buttonHref: 1, submitUrl: 1, photo: 1, logoImage: 1, endpoint: 1 }; // 주소는 길어도 한 줄 칸
   var LONG = { text: 1, description: 1, a: 1, lead: 1, notice: 1, successText: 1 };
   var TEMPLATES = {
@@ -777,6 +811,7 @@
     events: { date: "", title: "", type: "행사", text: "" },
   };
   var EVENT_TYPES = ["휴강", "보강", "특강", "행사", "공휴일", "기타"];
+  var ADD_LABELS = { materials: "📎 구글 드라이브 자료 첨부", videos: "▶ YouTube 영상 추가", topics: "＋ 학습 내용 추가" };
   // 묶음 제목 아래에 보여 줄 도움말
   var SET_HINTS = {
     materials: "구글 드라이브에서 파일 → 공유 → 링크 복사로 얻은 주소를 넣습니다. 공유 범위는 '링크가 있는 모든 사용자 – 뷰어'로 맞춰 주세요.",
@@ -793,7 +828,7 @@
     return (item.week ? item.week + "주차 · " : "") + (item.date && item.title ? item.date + " · " : "") + t;
   }
 
-  function leaf(parent, key, bare) {
+  function leaf(parent, key, bare, check) {
     var v = parent[key], input;
     if (typeof v === "boolean") {
       input = h("input", { type: "checkbox" });
@@ -809,10 +844,43 @@
       markDirty();
     });
     if (bare) return input;
-    return h("label", { class: "ed-field" + (long ? " wide" : "") }, [h("span", {}, label(key)), input]);
+    var field = h("label", { class: "ed-field" + (long ? " wide" : "") }, [h("span", {}, label(key)), input]);
+    if (key === "url" && check) { // 주소 종류 확인(강의 자료 = 구글 드라이브, 참고 영상 = YouTube면 바로 재생)
+      var tip = h("small", { class: "ed-tip" });
+      var show = function () {
+        var res = check(String(input.value || "").trim());
+        tip.textContent = res ? res.text : "";
+        tip.className = "ed-tip" + (res ? (res.ok ? " ok" : " bad") : "");
+      };
+      input.addEventListener("input", show);
+      field.appendChild(tip);
+      show();
+    }
+    return field;
   }
 
-  function objectEditor(obj, rerenderParent) {
+  // 주차 항목: 강의 자료·참고 영상 칸이 없으면 만들어 주고, 칸 순서를 보기 좋게 맞춥니다.
+  function normalizeWeek(obj) {
+    if (!Array.isArray(obj.topics)) obj.topics = [];
+    if (!Array.isArray(obj.materials)) obj.materials = [];
+    if (!Array.isArray(obj.videos)) obj.videos = [];
+    var copy = {};
+    Object.keys(obj).forEach(function (k) { copy[k] = obj[k]; delete obj[k]; });
+    ["week", "title", "tag", "topics", "materials", "videos"].forEach(function (k) { if (k in copy) obj[k] = copy[k]; });
+    Object.keys(copy).forEach(function (k) { if (!(k in obj)) obj[k] = copy[k]; });
+  }
+  var URL_CHECKS = {
+    materials: function (url) {
+      if (!url) return { ok: false, text: "구글 드라이브 공유 주소를 붙여 넣어 주세요." };
+      return KU.driveId(url) ? { ok: true, text: "✓ 구글 드라이브 주소입니다." } : { ok: false, text: "구글 드라이브 주소가 아닙니다. (drive.google.com 또는 docs.google.com)" };
+    },
+    videos: function (url) {
+      if (!url) return null;
+      return KU.youtubeId(url) ? { ok: true, text: "✓ YouTube 영상 — 주차를 펼치면 바로 재생됩니다." } : { ok: true, text: "YouTube 주소가 아니어서 링크로 표시됩니다." };
+    },
+  };
+  function objectEditor(obj, rerenderParent, urlCheck) {
+    if ("week" in obj && "title" in obj && ("topics" in obj || "tag" in obj)) normalizeWeek(obj);
     var box = h("div", { class: "ed-grid" });
     Object.keys(obj).forEach(function (k) {
       if (HIDE[k]) return;
@@ -828,7 +896,7 @@
           objectEditor(v),
           k === "assignment" ? button("과제 삭제", "ad-mini danger", function () { delete obj.assignment; markDirty(); rerenderParent(); }) : null,
         ]));
-      } else box.appendChild(leaf(obj, k));
+      } else box.appendChild(leaf(obj, k, false, urlCheck));
     });
     // 주차 항목에만 있는 선택 항목
     if ("topics" in obj && rerenderParent) {
@@ -868,7 +936,7 @@
         if (item && typeof item === "object") {
           var det = h("details", { class: "ed-item" }, [
             h("summary", {}, [h("span", { class: "ed-sum" }, (i + 1) + ". " + summaryOf(item)), controls(i)]),
-            objectEditor(item, function () { openIdx = i; render(); }),
+            objectEditor(item, function () { openIdx = i; render(); }, URL_CHECKS[key]),
           ]);
           det.open = i === openIdx;
           det.addEventListener("toggle", function () { if (det.open) openIdx = i; else if (openIdx === i) openIdx = -1; });
@@ -877,7 +945,7 @@
           box.appendChild(h("div", { class: "ed-row" }, [leaf(arr, i, true), controls(i)]));
         }
       });
-      box.appendChild(button("＋ 추가", "ad-mini add", function () {
+      box.appendChild(button(ADD_LABELS[key] || "＋ 추가", "ad-mini add" + (ADD_LABELS[key] ? " strong" : ""), function () {
         var item = arr.length ? blank(arr[0]) : (TEMPLATES[key] ? clone(TEMPLATES[key]) : "");
         if (item && typeof item === "object") {
           if ("week" in item) item.week = arr.length + 1;

@@ -124,6 +124,7 @@
     usingOverride = !!remote.override;
     C = remote.config || BASE;
     FULL = !!remote.full;
+    if (remote.version) C.site.version = remote.version; // 버전은 서버(package.json)가 알려 주는 값을 씁니다.
     // 서버가 인정하지 않는 로그인 기록은 지웁니다(기한 만료 등).
     if (store.get("adminLogin", null) && remote.role !== "admin") store.set("adminLogin", null);
     var bootSession = store.get("session", null);
