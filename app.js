@@ -2,6 +2,43 @@
 (function () {
   "use strict";
 
+  /* 서버(DB)가 연결된 곳에서는 저장된 내용을 먼저 받아 온 뒤 화면을 그립니다.
+   * 파일을 직접 열었거나 서버에 DB가 없으면 예전처럼 브라우저 저장소만 씁니다. */
+  function start(remote) {
+    main(remote && remote.db ? remote : null);
+    document.dispatchEvent(new Event("ku:ready"));
+  }
+  if (location.protocol === "file:" || !window.fetch) return start(null);
+  var started = false;
+  var giveUp = setTimeout(function () { if (!started) { started = true; start(null); } }, 5000);
+  fetch("api/state", { cache: "no-store" })
+    .then(function (res) { return res.ok ? res.json() : null; })
+    .catch(function () { return null; })
+    .then(function (remote) {
+      if (started) return;
+      started = true;
+      clearTimeout(giveUp);
+      start(remote);
+    });
+
+  function main(remote) {
+  var REMOTE = !!remote; // true면 서버(DB)에 저장
+  // 서버 API 호출. 실패하면 서버가 보낸 안내 문구를 담은 오류를 던집니다.
+  function call(method, path, body, token) {
+    var headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = "Bearer " + token;
+    return fetch("api/" + path, { method: method, headers: headers, body: body === undefined ? undefined : JSON.stringify(body), cache: "no-store" })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (res.ok) return data;
+          var err = new Error(data.error || "요청을 처리하지 못했습니다. (" + res.status + ")");
+          err.status = res.status;
+          err.field = data.field;
+          throw err;
+        });
+      });
+  }
+
   var BASE = window.SITE_CONFIG;
   if (!BASE) {
     document.getElementById("main").textContent = "config.js를 불러오지 못했습니다.";
@@ -75,6 +112,10 @@
   var override = store.get("config", null);
   var usingOverride = !!(override && override.base === baseStamp && override.data);
   var C = usingOverride ? override.data : BASE;
+  if (REMOTE) { // 서버에 저장된 수정본이 있으면 그것을, 없으면 config.js 원본을 씁니다.
+    usingOverride = !!remote.config;
+    C = remote.config || BASE;
+  }
   C.notices = C.notices || { title: "공지사항", items: [] };
   C.admin = C.admin || { passwordHash: "" };
   C.portfolio = C.portfolio || { id: "portfolio", eyebrow: "Portfolio", title: "우수 과제 포트폴리오", lead: "", buttonLabel: "과제물 보기", emptyText: "", items: [] };
@@ -820,13 +861,19 @@
     if (!g) { g = "g:" + Math.random().toString(36).slice(2); store.set("guest", g); }
     return g;
   }
+  var remoteCounts = REMOTE ? (remote.polls || {}) : null; // 서버가 센 응답 수 { 설문 id: { 보기 번호: 수 } }
   function pollStats(p) {
     var votes = store.get("pollVotes", {})[p.id] || {};
     var counts = p.options.map(function () { return 0; });
     var total = 0;
-    Object.keys(votes).forEach(function (k) {
-      if (votes[k] >= 0 && votes[k] < counts.length) { counts[votes[k]]++; total++; }
-    });
+    if (REMOTE) {
+      var rc = remoteCounts[p.id] || {};
+      counts = counts.map(function (x, i) { var n = Number(rc[i]) || 0; total += n; return n; });
+    } else {
+      Object.keys(votes).forEach(function (k) {
+        if (votes[k] >= 0 && votes[k] < counts.length) { counts[votes[k]]++; total++; }
+      });
+    }
     return { counts: counts, total: total, mine: votes[voterId()] };
   }
   // 설문 하나를 막대그래프 카드로 그립니다. readOnly면 결과만 보여 줍니다.
@@ -853,6 +900,11 @@
           (all[p.id] = all[p.id] || {})[voterId()] = idx;
           store.set("pollVotes", all);
           updatePoll();
+          if (REMOTE) {
+            call("POST", "poll/vote", { pollId: p.id, voter: voterId(), choice: idx })
+              .then(function (res) { remoteCounts = res.polls || {}; updatePoll(); })
+              .catch(function (err) { showToast(err.message); });
+          }
         });
         return row;
       })),
@@ -876,6 +928,24 @@
   }
   // 다른 탭에서 투표해도 바로 반영
   window.addEventListener("storage", function (e) { if (e.key === "kucourse:pollVotes") updatePoll(); });
+  // 서버에 모인 다른 사람들의 응답을 20초마다 다시 받아 옵니다.
+  if (REMOTE) {
+    setInterval(function () {
+      if (document.hidden) return;
+      call("GET", "polls").then(function (res) {
+        var next = res.polls || {};
+        if (JSON.stringify(next) !== JSON.stringify(remoteCounts)) { remoteCounts = next; updatePoll(); }
+      }).catch(function () { /* 다음 번에 다시 */ });
+    }, 20000);
+  }
+  // 화면 위쪽에 잠깐 뜨는 안내
+  function showToast(text) {
+    var t = h("div", { class: "toast", role: "status" }, text);
+    document.body.appendChild(t);
+    setTimeout(function () { t.classList.add("show"); }, 50);
+    setTimeout(function () { t.classList.remove("show"); }, 3600);
+    setTimeout(function () { t.remove(); }, 4200);
+  }
 
   /* ── 참여하기: 수강 신청서 ── */
   var apply = join.apply;
@@ -903,6 +973,10 @@
         renderApply();
         applyBox.scrollIntoView({ block: "center" });
       }
+      if (REMOTE) {
+        return call("POST", "applications", { data: values }).then(done)
+          .catch(function (err) { api.error(err.message); });
+      }
       if (!apply.endpoint) return done();
       fetch(apply.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) })
         .then(function (res) { if (!res.ok) throw new Error(res.status); done(); })
@@ -915,7 +989,7 @@
     pollBox,
     pollAdminBox,
     h("h3", { class: "sub-title gap-top reveal", id: "apply" }, apply.title),
-    notice(apply.notice),
+    REMOTE ? null : notice(apply.notice), // 서버에 저장될 때는 '이 기기에만 저장' 안내를 숨깁니다.
     applyBox,
   ]);
 
@@ -925,6 +999,27 @@
   var pendingAssign = ""; // 커리큘럼의 '과제 제출하기'로 들어왔을 때 미리 고를 주차
   var assignWeeks = weeks.filter(function (w) { return w.assignment; });
   var todayWeek = classMap[dateKey(todayStart)];
+
+  // 서버에 저장된 내 출석·제출 기록을 화면에 반영
+  function applyMine(res) {
+    var me = store.get("session", null);
+    if (!me) return;
+    var att = store.get("attendance", {}), sub = store.get("submissions", {});
+    att[me.id] = res.attendance || {};
+    sub[me.id] = res.submissions || [];
+    store.set("attendance", att);
+    store.set("submissions", sub);
+    renderRoom();
+  }
+  function syncMine() {
+    var me = store.get("session", null);
+    if (!REMOTE) return;
+    if (me && !me.token) { store.set("session", null); return renderRoom(); } // 서버 연결 전에 한 로그인은 다시
+    if (!me) return renderRoom();
+    call("GET", "me", undefined, me.token).then(applyMine).catch(function (err) {
+      if (err.status === 401) { store.set("session", null); renderRoom(); }
+    });
+  }
 
   function renderRoom() {
     roomBox.textContent = "";
@@ -938,6 +1033,15 @@
           { name: "name", label: "이름", type: "text", required: true, placeholder: "홍길동" },
           { name: "code", label: "수강 코드", type: "password", required: true, wide: true, hint: "첫 수업에서 안내받은 코드를 입력하세요." },
         ], "로그인", function (values, api) {
+          if (REMOTE) { // 서버가 수강 코드와 명단을 확인합니다.
+            return call("POST", "student/login", { id: values.id, name: values.name, code: values.code })
+              .then(function (res) {
+                store.set("session", { id: res.id, name: res.name, token: res.token });
+                renderRoom(); updatePoll();
+                syncMine();
+              })
+              .catch(function (err) { api.fail(err.field === "id" ? "id" : "code", err.message); });
+          }
           var codeOk = room.accessCodeHash ? hashSecret(values.code) === room.accessCodeHash : values.code === room.accessCode;
           if (!codeOk) return api.fail("code", "수강 코드가 맞지 않습니다.");
           // 관리자가 명단을 등록했다면 명단에 있는 학번·이름만 들어올 수 있습니다.
@@ -972,6 +1076,10 @@
       allAtt[me.id] = myAtt;
       store.set("attendance", allAtt);
       renderRoom();
+      if (REMOTE) {
+        call("POST", "attendance", { week: w.week }, me.token).then(applyMine)
+          .catch(function (err) { showToast(err.message); if (err.status === 401) store.set("session", null); syncMine(); });
+      }
     }
     var attended = weeks.filter(function (w) { return myAtt[w.week]; }).length;
     var todayBtn = h("button", { class: "btn btn-primary btn-sm", type: "button" },
@@ -1020,6 +1128,10 @@
       allSub[me.id] = mySub;
       store.set("submissions", allSub);
       renderRoom();
+      if (REMOTE) {
+        call("POST", "submissions", { week: w.week, fileName: values.file.name, size: values.file.size, memo: values.memo }, me.token).then(applyMine)
+          .catch(function (err) { showToast(err.message); if (err.status === 401) store.set("session", null); syncMine(); });
+      }
     });
     if (pendingAssign) { subForm.setValue("week", pendingAssign); pendingAssign = ""; }
 
@@ -1045,7 +1157,10 @@
     roomBox.appendChild(h("div", { class: "grid grid-2 room-grid" }, [attCard, subCard]));
   }
 
-  var roomEl = section(room, [notice(room.notice), roomBox]);
+  var roomEl = section(room, [
+    notice(REMOTE ? "출석과 제출 기록은 서버에 저장됩니다. 과제 파일 자체는 전송되지 않고 파일 이름·크기·제출 시각만 기록됩니다." : room.notice),
+    roomBox,
+  ]);
 
   // 커리큘럼의 '과제 제출하기' → 내 강의실에서 해당 과제를 미리 선택
   document.addEventListener("click", function (e) {
@@ -1098,6 +1213,7 @@
   updatePoll();
   renderApply();
   renderRoom();
+  syncMine();
 
   /* ── 푸터: 교수자 사진·소개·연락처 ── */
   var ins = C.instructor;
@@ -1369,6 +1485,8 @@
   /* ── 관리자 모드(admin.js)와 함께 쓰는 것들 ── */
   window.KU = {
     h: h, store: store, makeForm: makeForm, config: C, baseStamp: baseStamp, usingOverride: usingOverride,
+    remote: REMOTE, call: call, toast: showToast,
+    setPollCounts: function (polls) { if (REMOTE) { remoteCounts = polls || {}; updatePoll(); } },
     hashSecret: hashSecret, rosterHash: rosterHash, sha256: sha256, weeks: weeks,
     fmtDateTime: fmtDateTime, fmtShort: fmtShort, driveId: driveId,
     // 공지를 바꾼 뒤 새로고침 없이 다시 그립니다.
@@ -1443,4 +1561,5 @@
   } else {
     reveals.forEach(function (el) { el.classList.add("in"); });
   }
+  } // main 끝
 })();

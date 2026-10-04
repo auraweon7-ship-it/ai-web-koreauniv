@@ -2,3 +2,5 @@
 .claude/
 # 백업용 압축 파일
 *.zip
+# 설치된 패키지
+node_modules/

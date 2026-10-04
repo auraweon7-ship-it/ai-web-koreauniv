@@ -4,9 +4,37 @@
 (function () {
   "use strict";
 
+  // app.js가 화면을 다 그린 뒤(서버 응답을 받은 뒤)에 시작합니다.
+  if (window.KU) startAdmin(); else document.addEventListener("ku:ready", startAdmin);
+
+  function startAdmin() {
   var KU = window.KU;
   if (!KU) return;
-  var h = KU.h, store = KU.store, makeForm = KU.makeForm, C = KU.config;
+  var store = KU.store, makeForm = KU.makeForm, C = KU.config;
+  var REMOTE = KU.remote; // true면 서버(DB)에 저장
+
+  // 서버에 저장될 때는 '이 브라우저에만 저장' 안내 문구를 바꿔 보여 줍니다.
+  function serverText(t) {
+    if (typeof t !== "string") return t;
+    return t
+      .replace(/이 브라우저에 저장된 기록만 보입니다\..*$/, "서버(DB)에 모인 전체 기록입니다.")
+      .replace(/바꾼 뒤 '저장하고 적용' → 설정 파일을 내려받아 교체해야 다른 기기에도 적용됩니다\./, "바꾼 뒤 '저장하고 적용'을 누르면 서버에 저장되어 바로 적용됩니다. (Railway 변수 ADMIN_PASSWORD를 쓰는 경우에는 그 값이 우선합니다.)")
+      .replace(/^참고: 서버 없는 사이트의 관리자 잠금은.*$/, "참고: 관리자 비밀번호는 서버가 확인합니다. 다만 비밀번호 지문(해시)이 설정 안에 들어 있으므로 길고 다른 곳에서 쓰지 않는 비밀번호를 쓰세요. Railway 변수 ADMIN_PASSWORD를 넣으면 지문 대신 그 값으로 확인합니다.")
+      .replace(/참여 수는 이 브라우저에 저장된 응답만 셉니다\./, "참여 수는 서버에 모인 전체 응답입니다.")
+      .replace(/(바로 )?이 브라우저에(서)? (바로 )?(저장|반영)(됩니다\.|되며,)\s*모든 방문자에게[^.]*config\.js를 내려받아 교체하세요\./, "서버(DB)에 저장되어 모든 방문자에게 바로 반영됩니다.");
+  }
+  var h = !REMOTE ? KU.h : function (tag, attrs, children) {
+    return KU.h(tag, attrs, Array.isArray(children) ? children.map(serverText) : serverText(children));
+  };
+  function adminToken() { var s = store.get("adminLogin", null); return s && s.token; }
+  // 관리자 권한이 필요한 요청. 로그인이 풀렸으면 알려 줍니다.
+  function adminCall(method, path, body) {
+    return KU.call(method, path, body, adminToken()).catch(function (err) {
+      if (err.status === 401) { setAdmin(false); KU.toast("관리자 로그인이 풀렸습니다. 다시 로그인해 주세요."); }
+      else KU.toast("저장하지 못했습니다: " + err.message);
+      throw err;
+    });
+  }
 
   // 화면 계산용 임시 값(_로 시작)은 빼고 복사
   function clone(o) {
@@ -21,10 +49,12 @@
   var LOGIN_DAYS = 7;
   function isAdmin() {
     var s = store.get("adminLogin", null);
+    if (REMOTE) return !!(s && s.token && Date.now() < s.until); // 실제 권한은 서버가 토큰으로 확인
     return !!(s && s.hash && s.hash === C.admin.passwordHash && Date.now() < s.until);
   }
-  function setAdmin(on) {
-    store.set("adminLogin", on ? { hash: C.admin.passwordHash, until: Date.now() + LOGIN_DAYS * 86400000 } : null);
+  function setAdmin(on, token) {
+    var until = Date.now() + LOGIN_DAYS * 86400000;
+    store.set("adminLogin", !on ? null : REMOTE ? { token: token, until: until } : { hash: C.admin.passwordHash, until: until });
     showAdminState();
   }
   // 관리자 로그인 중이면 자물쇠가 열리고, 각 섹션에 '편집' 버튼이 나타납니다.
@@ -165,6 +195,7 @@
     var all = store.get("pollVotes", {});
     delete all[id];
     store.set("pollVotes", all);
+    if (REMOTE) adminCall("POST", "admin/poll/clear", { pollId: id }).then(function (res) { KU.setPollCounts(res.polls); }, function () {});
   }
   // idx가 -1이면 새 설문, 아니면 그 번호의 설문 수정
   function pollDialog(idx) {
@@ -477,11 +508,19 @@
 
   // anchor를 주면(본문에서 바로 편집한 경우) 새로고침 뒤 관리자 화면 대신 그 위치로 돌아갑니다.
   function saveDraft(reload, anchor) {
+    function after() {
+      if (!reload) return updateStatus();
+      try { sessionStorage.setItem(SESSION_KEY + (anchor ? ":goto" : ":open"), anchor || "1"); } catch (e) { /* 무시 */ }
+      location.reload();
+    }
+    if (REMOTE) { // 서버(DB)에 저장 → 모든 방문자에게 바로 반영
+      dirty = false;
+      updateStatus();
+      return adminCall("PUT", "config", { config: clone(draft) }).then(after, function () { dirty = true; updateStatus(); });
+    }
     store.set("config", { base: KU.baseStamp, data: draft });
     dirty = false;
-    if (!reload) return updateStatus();
-    try { sessionStorage.setItem(SESSION_KEY + (anchor ? ":goto" : ":open"), anchor || "1"); } catch (e) { /* 무시 */ }
-    location.reload();
+    after();
   }
 
   /* ── 작은 도구들 ── */
@@ -572,13 +611,23 @@
   ];
   var fails = 0, lockUntil = 0;
 
+  var askLogin = false; // 서버에 비밀번호가 이미 있다는 응답을 받았을 때 true
   function onLock() {
     if (isAdmin()) return openPanel();
     var close;
-    if (!C.admin.passwordHash) {
+    if (!C.admin.passwordHash && !(REMOTE && askLogin)) {
       close = dialog("관리자 비밀번호 만들기", "아직 비밀번호가 없습니다. 8자 이상으로 정해 주세요.",
         makeForm(NEW_PW, "비밀번호 만들기", function (v, api) {
           if (v.pw !== v.pw2) return api.fail("pw2", "두 비밀번호가 서로 다릅니다.");
+          if (REMOTE) {
+            return KU.call("POST", "admin/setup", { password: v.pw }).then(function (res) {
+              draft.admin.passwordHash = C.admin.passwordHash = res.passwordHash;
+              setAdmin(true, res.token); close(); openPanel("security");
+            }).catch(function (err) {
+              if (err.status === 409) { askLogin = true; close(); return onLock(); } // 이미 비밀번호가 있음 → 로그인 창으로
+              api.fail("pw", err.message);
+            });
+          }
           draft.admin.passwordHash = C.admin.passwordHash = KU.hashSecret(v.pw);
           saveDraft(false);
           setAdmin(true); close(); openPanel("security");
@@ -587,6 +636,11 @@
       close = dialog("관리자 로그인", "", makeForm([
         { name: "pw", label: "비밀번호", type: "password", required: true, wide: true },
       ], "들어가기", function (v, api) {
+        if (REMOTE) { // 서버가 비밀번호를 확인하고 로그인 토큰을 줍니다.
+          return KU.call("POST", "admin/login", { password: v.pw }).then(function (res) {
+            setAdmin(true, res.token); close(); openPanel();
+          }).catch(function (err) { api.fail("pw", err.message); });
+        }
         if (Date.now() < lockUntil) return api.fail("pw", "여러 번 틀렸습니다. 30초 뒤 다시 시도해 주세요.");
         if (KU.hashSecret(v.pw) !== C.admin.passwordHash) {
           if (++fails >= 5) { fails = 0; lockUntil = Date.now() + 30000; }
@@ -984,11 +1038,27 @@
   }
 
   /* ── 탭: 내역 확인 ── */
+  var recordsLoaded = false; // 서버 기록을 받아 왔는지
+  var serverNames = {};      // 학번 → 이름(서버 기록에 있는 이름)
   function tabRecords() {
+    if (REMOTE && !recordsLoaded) {
+      adminCall("GET", "admin/records").then(function (res) {
+        var att = {}, sub = {};
+        res.attendance.forEach(function (r) { (att[r.id] = att[r.id] || {})[r.week] = r.at; serverNames[r.id] = r.name; });
+        res.submissions.forEach(function (r) { (sub[r.id] = sub[r.id] || []).push(r); serverNames[r.id] = r.name; });
+        store.set("attendance", att);
+        store.set("submissions", sub);
+        store.set("applications", res.applications);
+        recordsLoaded = true;
+        if (current === "records" && panel && panel.parentNode) showTab("records");
+        recordsLoaded = false; // 다음에 탭을 열면 다시 받아 옵니다.
+      }, function () {});
+      return [h("p", { class: "cal-empty" }, "서버에서 기록을 불러오는 중입니다…")];
+    }
     var roster = store.get("roster", []);
     function nameOf(id) {
       var r = roster.filter(function (x) { return x.id === id; })[0];
-      return r ? r.name : "";
+      return r ? r.name : (serverNames[id] || "");
     }
     var weeks = KU.weeks;
 
@@ -1068,7 +1138,9 @@
     return [
       h("div", { class: "card ad-card" }, [
         h("h4", {}, "💾 설정 파일 저장·불러오기"),
-        h("p", {}, "지금 편집 중인 내용을 config.js 파일로 내려받습니다. 이 파일로 사이트 폴더의 config.js를 바꿔 다시 올리면 모든 방문자에게 반영됩니다."),
+        h("p", {}, REMOTE
+          ? "지금 편집 중인 내용을 config.js 파일로 내려받습니다(백업용). 내용은 이미 서버(DB)에 저장되므로 파일을 교체할 필요는 없습니다."
+          : "지금 편집 중인 내용을 config.js 파일로 내려받습니다. 이 파일로 사이트 폴더의 config.js를 바꿔 다시 올리면 모든 방문자에게 반영됩니다."),
         h("div", { class: "ad-row" }, [
           button("설정 파일 내려받기 (config.js)", "btn btn-primary btn-sm", function () {
             download("config.js",
@@ -1080,11 +1152,16 @@
         msg,
       ]),
       h("div", { class: "card ad-card" }, [
-        h("h4", {}, "↩️ 이 브라우저의 수정본"),
-        h("p", {}, KU.usingOverride
-          ? "지금 이 브라우저는 관리자 화면에서 고친 수정본을 보여 주고 있습니다. 다른 방문자는 서버의 config.js를 봅니다."
-          : "지금은 config.js 원본 그대로 보여 주고 있습니다."),
+        h("h4", {}, REMOTE ? "↩️ 서버에 저장된 수정본" : "↩️ 이 브라우저의 수정본"),
+        h("p", {}, REMOTE
+          ? (KU.usingOverride
+            ? "지금은 서버(DB)에 저장된 수정본을 모든 방문자에게 보여 주고 있습니다. 수정본이 있는 동안에는 config.js 파일을 고쳐도 화면에 반영되지 않습니다."
+            : "지금은 config.js 원본 그대로 보여 주고 있습니다. 관리자 화면에서 무엇이든 저장하면 그때부터 서버(DB)의 수정본을 씁니다.")
+          : (KU.usingOverride
+            ? "지금 이 브라우저는 관리자 화면에서 고친 수정본을 보여 주고 있습니다. 다른 방문자는 서버의 config.js를 봅니다."
+            : "지금은 config.js 원본 그대로 보여 주고 있습니다.")),
         confirmButton("수정본 지우고 config.js 원본으로 되돌리기", "btn btn-ghost btn-sm", function () {
+          if (REMOTE) return adminCall("DELETE", "config").then(function () { location.reload(); }, function () {});
           store.set("config", null);
           location.reload();
         }),
@@ -1278,4 +1355,5 @@
     sessionStorage.removeItem(SESSION_KEY + ":open");
   } catch (e) { /* 무시 */ }
   if (reopen && isAdmin()) openPanel();
+  } // startAdmin 끝
 })();
