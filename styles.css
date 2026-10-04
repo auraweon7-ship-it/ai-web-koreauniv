@@ -1133,3 +1133,16 @@ body.is-admin .folio-add.admin-only { display: grid !important; }
   .video-grid { grid-template-columns: 1fr; }
   .modal-wide .guide-edit .ed-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 관리자: 강의 관리의 하위 메뉴와 현황 표 ── */
+.ad-subtabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.ad-subtab { border: 1px solid var(--line); background: #fff; color: var(--ink-soft); border-radius: 999px; padding: 9px 18px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.ad-subtab:hover { border-color: var(--accent); color: var(--accent); }
+.ad-subtab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ad-matrix td.mx, .ad-matrix th { text-align: center; }
+.ad-matrix th:nth-child(-n+3), .ad-matrix td:nth-child(-n+3) { text-align: left; }
+.ad-matrix tfoot td { background: var(--pink-50); font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0; }
+.mx-yes { display: inline-block; min-width: 24px; padding: 2px 8px; border-radius: 999px; background: var(--purple-100); color: var(--accent); font-weight: 700; font-size: 13px; }
+.mx-late { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--pink-100); color: #b96b00; font-weight: 700; font-size: 13px; }
+.mx-no { color: #b9b8b0; font-size: 13px; }
+.mx-time { display: block; margin-top: 2px; font-size: 11px; color: var(--ink-soft); }

@@ -1034,12 +1034,154 @@
   var rosterRows = null;   // 서버에서 받아 온 명단
   var rosterFresh = false; // 방금 받아 온 것인지
   var rosterMsg = "";
+  var recAtt = {}, recSub = {}, recNames = {}; // 서버 기록: 학번 → {주차: 시각}, 학번 → [제출], 학번 → 이름
   function loadRoster() {
-    return adminCall("GET", "admin/roster").then(function (res) {
-      rosterRows = res.roster;
+    return Promise.all([adminCall("GET", "admin/roster"), adminCall("GET", "admin/records")]).then(function (res) {
+      rosterRows = res[0].roster;
+      recAtt = {}; recSub = {}; recNames = {};
+      res[1].attendance.forEach(function (r) { (recAtt[r.id] = recAtt[r.id] || {})[r.week] = r.at; recNames[r.id] = r.name; });
+      res[1].submissions.forEach(function (r) { (recSub[r.id] = recSub[r.id] || []).push(r); recNames[r.id] = r.name; });
       rosterFresh = true;
       if (current === "roster" && panel && panel.parentNode) showTab("roster");
     }, function () {});
+  }
+
+  /* ── 탭: 강의 관리 = 수강생 현황 · 주차별 출석 현황 · 주차별 과제 제출 현황 ── */
+  var manageView = "students";
+  function manageNav() {
+    return h("div", { class: "ad-subtabs", role: "tablist" }, [
+      ["students", "👥 수강생 현황"], ["attendance", "✅ 주차별 출석 현황"], ["submissions", "📤 주차별 과제 제출 현황"],
+    ].map(function (v) {
+      var b = button(v[1], "ad-subtab" + (manageView === v[0] ? " active" : ""), function () {
+        manageView = v[0];
+        if (rosterRows) rosterFresh = true; // 이미 받아 온 내용으로 화면만 바꿉니다.
+        showTab("roster");
+      });
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(manageView === v[0]));
+      return b;
+    }));
+  }
+  // 출석·제출 표에 쓸 자료: 학생 목록과 기록
+  function manageData() {
+    var students, att, sub, names;
+    if (REMOTE) {
+      if (!rosterFresh) {
+        loadRoster();
+        if (!rosterRows) return null;
+      }
+      rosterFresh = false;
+      students = rosterRows.map(function (r) { return { id: r.id, name: r.name }; });
+      att = recAtt; sub = recSub; names = recNames;
+    } else {
+      students = store.get("roster", []).map(function (r) { return { id: r.id, name: r.name }; });
+      att = store.get("attendance", {}); sub = store.get("submissions", {}); names = {};
+    }
+    // 명단에는 없지만 기록이 있는 학번도 함께 보여 줍니다.
+    var known = {};
+    students.forEach(function (st) { known[st.id] = 1; });
+    Object.keys(att).concat(Object.keys(sub)).forEach(function (id) {
+      if (known[id]) return;
+      known[id] = 1;
+      students.push({ id: id, name: names[id] || "", extra: true });
+    });
+    return { students: students, att: att, sub: sub };
+  }
+  function matrixCard(title, hintText, fileName, head, rows, csvRows, foot) {
+    var dl = button("엑셀용 파일(CSV) 내려받기", "btn btn-ghost btn-sm", function () { download(fileName, toCsv(head, csvRows), "text/csv"); });
+    dl.disabled = !rows.length;
+    return h("div", { class: "card ad-card" }, [
+      h("div", { class: "ad-row between" }, [
+        h("h4", {}, title),
+        h("span", { class: "ad-row" }, [
+          REMOTE ? button("새로 고침", "btn btn-ghost btn-sm", function () { rosterFresh = false; showTab("roster"); }) : null,
+          dl,
+        ]),
+      ]),
+      h("p", { class: "field-hint" }, hintText),
+      rows.length ? h("div", { class: "ad-table-wrap" }, [
+        h("table", { class: "ad-table ad-matrix" }, [
+          h("thead", {}, [h("tr", {}, head.map(function (x) { return h("th", {}, x); }))]),
+          h("tbody", {}, rows),
+          foot ? h("tfoot", {}, [foot]) : null,
+        ]),
+      ]) : h("p", { class: "cal-empty" }, "등록된 수강생이 없습니다. '수강생 현황'에서 수강생을 등록하거나 수강 신청을 받으면 여기에 나타납니다."),
+    ]);
+  }
+  function attendanceView(d) {
+    var weeks = KU.weeks;
+    var head = ["번호", "학번", "이름"].concat(weeks.map(function (w) { return w.week + "주"; })).concat(["출석 수", "출석률"]);
+    var perWeek = weeks.map(function () { return 0; });
+    var csv = [];
+    var rows = d.students.map(function (st, i) {
+      var mine = d.att[st.id] || {};
+      var n = 0;
+      var cells = weeks.map(function (w, wi) {
+        var on = !!mine[w.week];
+        if (on) { n++; perWeek[wi]++; }
+        return h("td", { class: "mx", title: on ? "출석 " + stamp(mine[w.week]) : KU.fmtShort(w._date) }, [h("span", { class: on ? "mx-yes" : "mx-no" }, on ? "O" : "·")]);
+      });
+      var rate = weeks.length ? Math.round((n / weeks.length) * 100) + "%" : "-";
+      csv.push([i + 1, st.id, st.name].concat(weeks.map(function (w) { return mine[w.week] ? "O" : ""; })).concat([n, rate]));
+      return h("tr", {}, [h("td", {}, i + 1), h("td", {}, st.id), h("td", {}, st.name || (st.extra ? "(명단에 없음)" : ""))].concat(cells).concat([h("td", { class: "mx" }, [h("b", {}, String(n))]), h("td", { class: "mx" }, rate)]));
+    });
+    var total = d.students.length;
+    var foot = h("tr", {}, [h("td", { colspan: "3" }, "주차별 출석 인원")].concat(perWeek.map(function (n) {
+      return h("td", { class: "mx" }, n + (total ? "/" + total : ""));
+    })).concat([h("td", { colspan: "2" })]));
+    csv.push(["", "", "주차별 출석 인원"].concat(perWeek).concat(["", ""]));
+    return [matrixCard("✅ 주차별 출석 현황 (" + total + "명)",
+      "O는 출석, ·은 미출석입니다. 칸에 마우스를 올리면 출석한 시각이 보입니다." + (C.classroom.testMode ? " 지금은 미리 보기 모드라 수업일이 아니어도 출석이 기록됩니다." : ""),
+      "주차별_출석_현황.csv", head, rows, csv, total ? foot : null)];
+  }
+  function submissionsView(d) {
+    // 과제가 있는 주차 + (과제는 없어졌지만) 제출 기록이 남아 있는 주차
+    var cols = {};
+    KU.weeks.forEach(function (w) { if (w.assignment) cols[w.week] = w.assignment.title; });
+    Object.keys(d.sub).forEach(function (id) { d.sub[id].forEach(function (s) { if (!(s.week in cols)) cols[s.week] = s.title; }); });
+    var weekNos = Object.keys(cols).map(Number).sort(function (x, y) { return x - y; });
+    var head = ["번호", "학번", "이름"].concat(weekNos.map(function (n) { return n + "주 · " + cols[n]; })).concat(["제출 수"]);
+    var perCol = weekNos.map(function () { return 0; });
+    var csv = [];
+    var rows = d.students.map(function (st, i) {
+      var mine = d.sub[st.id] || [];
+      var n = 0;
+      var csvCells = [];
+      var cells = weekNos.map(function (wk, ci) {
+        // 같은 과제를 여러 번 냈으면 가장 최근 것을 표시
+        var list = mine.filter(function (s) { return Number(s.week) === wk; }).sort(function (x, y) { return y.at - x.at; });
+        var s = list[0];
+        if (!s) { csvCells.push("미제출"); return h("td", { class: "mx" }, [h("span", { class: "mx-no" }, "미제출")]); }
+        n++; perCol[ci]++;
+        csvCells.push((s.late ? "지각 " : "제출 ") + stamp(s.at) + " " + s.file);
+        return h("td", { class: "mx", title: s.file + (s.memo ? " · " + s.memo : "") + (list.length > 1 ? " · 총 " + list.length + "회 제출" : "") }, [
+          h("span", { class: s.late ? "mx-late" : "mx-yes" }, s.late ? "지각" : "제출"),
+          h("span", { class: "mx-time" }, stamp(s.at)),
+        ]);
+      });
+      csv.push([i + 1, st.id, st.name].concat(csvCells).concat([n]));
+      return h("tr", {}, [h("td", {}, i + 1), h("td", {}, st.id), h("td", {}, st.name || (st.extra ? "(명단에 없음)" : ""))].concat(cells).concat([h("td", { class: "mx" }, [h("b", {}, n + " / " + weekNos.length)])]));
+    });
+    var total = d.students.length;
+    var foot = h("tr", {}, [h("td", { colspan: "3" }, "과제별 제출 인원")].concat(perCol.map(function (n) {
+      return h("td", { class: "mx" }, n + (total ? "/" + total : ""));
+    })).concat([h("td", {})]));
+    csv.push(["", "", "과제별 제출 인원"].concat(perCol).concat([""]));
+    if (!weekNos.length) {
+      return [h("div", { class: "card ad-card" }, [
+        h("h4", {}, "📤 주차별 과제 제출 현황"),
+        h("p", { class: "cal-empty" }, "과제가 있는 주차가 없습니다. 커리큘럼의 주차 수정에서 '과제 추가'를 눌러 과제를 만들면 여기에 나타납니다."),
+      ])];
+    }
+    return [matrixCard("📤 주차별 과제 제출 현황 (" + total + "명)",
+      "제출·지각·미제출로 표시합니다. 칸에 마우스를 올리면 파일 이름과 메모가 보입니다. 과제 파일 자체는 저장되지 않습니다.",
+      "주차별_과제_제출_현황.csv", head, rows, csv, total ? foot : null)];
+  }
+  function tabManage() {
+    if (manageView === "students") return [manageNav()].concat(tabRoster());
+    var d = manageData();
+    if (!d) return [manageNav(), h("p", { class: "cal-empty" }, "서버에서 기록을 불러오는 중입니다…")];
+    return [manageNav()].concat(manageView === "attendance" ? attendanceView(d) : submissionsView(d));
   }
   function tabRosterRemote() {
     if (!rosterFresh) {
@@ -1389,7 +1531,7 @@
   }
 
   /* ── 관리자 화면 틀 ── */
-  var TABS = [["edit", "내용 편집", tabEdit], ["popups", "팝업", tabPopups], ["roster", "수강생 명단", tabRoster],
+  var TABS = [["edit", "내용 편집", tabEdit], ["popups", "팝업", tabPopups], ["roster", "강의 관리", tabManage],
     ["records", "내역 확인", tabRecords], ["security", "설정 파일·보안", tabSecurity]];
   var panel, body, status, saveBtn, tabBar, current = "edit";
   var editSection = ""; // '내용 편집' 탭에서 열어 둘 영역
