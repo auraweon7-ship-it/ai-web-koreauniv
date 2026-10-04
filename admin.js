@@ -131,6 +131,81 @@
     return true;
   };
 
+  /* ── 주차별 학습: 주차 카드에서 바로 추가·수정·삭제 ──
+   * 주차마다 강의 자료(구글 드라이브)와 참고 영상(YouTube)을 붙일 수 있습니다.
+   * 저장하면 수업 날짜·달력을 다시 계산해야 해서 화면을 새로 고칩니다. */
+  function weekTemplate(n) {
+    return { week: n, title: "", tag: "", topics: [""], materials: [], videos: [] };
+  }
+  // idx가 -1이면 새 주차, 아니면 그 번호의 주차 수정
+  function weekDialog(idx) {
+    var weeks = draft.curriculum.weeks;
+    var isNew = idx < 0;
+    var w = isNew ? weekTemplate(weeks.length + 1) : clone(weeks[idx]); // 복사본을 고치고, 저장할 때만 반영
+    if (!Array.isArray(w.topics)) w.topics = [];
+    if (!Array.isArray(w.materials)) w.materials = [];
+    if (!Array.isArray(w.videos)) w.videos = [];
+    // 편집 칸 순서: 주차 번호·제목·꼬리표 → 학습 내용 → 강의 자료 → 참고 영상 → (과제·날짜)
+    var ordered = {};
+    ["week", "title", "tag", "topics", "materials", "videos"].forEach(function (k) { ordered[k] = w[k]; });
+    Object.keys(w).forEach(function (k) { if (!(k in ordered)) ordered[k] = w[k]; });
+    w = ordered;
+
+    var close;
+    var alertBox = h("div", { class: "form-alert", role: "alert", hidden: "hidden" });
+    var editorBox = h("div", {});
+    function render() {
+      editorBox.textContent = "";
+      editorBox.appendChild(objectEditor(w, render));
+    }
+    function fail(msg) { alertBox.hidden = false; alertBox.textContent = msg; alertBox.scrollIntoView({ block: "nearest" }); }
+    var save = button(isNew ? "주차 추가" : "수정 내용 저장", "btn btn-primary", function () {
+      if (!String(w.title || "").trim()) return fail("제목을 입력해 주세요.");
+      w.topics = w.topics.filter(function (t) { return String(t || "").trim(); });
+      w.materials = w.materials.filter(function (m) { return m && String(m.url || "").trim(); });
+      w.videos = w.videos.filter(function (v) { return v && String(v.url || "").trim(); });
+      var badMaterial = w.materials.filter(function (m) { return !KU.driveId(m.url.trim()); })[0];
+      if (badMaterial) return fail("강의 자료 주소가 구글 드라이브 주소가 아닙니다: " + badMaterial.url);
+      var badVideo = w.videos.filter(function (v) { return !/^https?:\/\//.test(v.url.trim()); })[0];
+      if (badVideo) return fail("참고 영상 주소는 https://로 시작해야 합니다: " + badVideo.url);
+      w.materials.forEach(function (m) { m.url = m.url.trim(); });
+      w.videos.forEach(function (v) { v.url = v.url.trim(); });
+      if (isNew) weeks.push(w); else weeks[idx] = w;
+      saved = true;
+      close();
+      saveDraft(true, "weeks-title");
+    });
+    var saved = false;
+    render();
+    close = dialog(isNew ? "주차 추가" : (w.week + "주차 수정"), "", h("div", { class: "guide-edit" }, [alertBox, editorBox, save]), "🗓️");
+    var backs = document.querySelectorAll(".modal-backdrop");
+    backs[backs.length - 1].querySelector(".modal").classList.add("modal-wide");
+  }
+  // 주차 카드마다 수정·삭제 버튼, 목록 끝에 '주차 추가' 칸 (관리자 로그인 중에만 보임)
+  (function () {
+    var list = document.querySelector("#curriculum .week-list");
+    if (!list) return;
+    [].forEach.call(list.querySelectorAll(".week-item"), function (item, idx) {
+      var edit = button("✏️", "ad-mini", function () { if (isAdmin()) weekDialog(idx); });
+      edit.title = "수정";
+      edit.setAttribute("aria-label", "이 주차 수정");
+      item.querySelector("summary").appendChild(h("span", { class: "card-admin in-summary admin-only" }, [
+        edit,
+        deleteButton(function () {
+          if (!isAdmin()) return;
+          draft.curriculum.weeks.splice(idx, 1);
+          saveDraft(true, "weeks-title");
+        }),
+      ]));
+    });
+    var tile = h("button", { class: "folio-add small admin-only", type: "button" }, [
+      h("span", { class: "folio-add-plus", "aria-hidden": "true" }, "＋"),
+      h("b", {}, "주차 추가"),
+    ]);
+    tile.addEventListener("click", function () { if (isAdmin()) weekDialog(-1); });
+    list.appendChild(tile);
+  })();
+
   /* ── 공지사항: 카드에서 바로 추가·수정·삭제 ── */
   function applyNotices() {
     saveDraft(false);
@@ -666,7 +741,7 @@
     suffix: "단위", eyebrow: "작은 영문 제목", title: "제목", lead: "소개 문구", slides: "슬라이드", text: "내용",
     weeksTitle: "주차 목록 제목", calendarTitle: "달력 제목", schedule: "수업 일정 기본값", firstClass: "첫 수업일 (연-월-일)",
     time: "수업 시간", location: "수업 장소", submitUrl: "과제 제출 주소", weeks: "주차", week: "주차 번호", tag: "꼬리표",
-    topics: "학습 내용", videos: "참고 영상", url: "주소", assignment: "과제", due: "마감 (연-월-일T시:분)", date: "날짜 (연-월-일)",
+    topics: "학습 내용", videos: "참고 영상 (YouTube)", materials: "강의 자료 (구글 드라이브)", url: "주소", assignment: "과제", due: "마감 (연-월-일T시:분)", date: "날짜 (연-월-일)",
     toolsTitle: "도구 제목", tools: "AI 도구", name: "이름", category: "분류", prepTitle: "준비물 제목", prep: "준비물",
     poll: "투표", help: "도움말", options: "보기", apply: "수강 신청서", notice: "안내 문구", endpoint: "전송할 서버 주소",
     submitLabel: "제출 버튼 문구", successTitle: "접수 완료 제목", successText: "접수 완료 문구", fields: "입력 항목",
@@ -688,13 +763,20 @@
     address: "주소", copyright: "저작권 문구", pinned: "중요 표시", links: "링크",
   };
   var HIDE = { rosterHashes: 1, accessCodeHash: 1, accessCode: 1, passwordHash: 1 };
+  var ONE_LINE = { url: 1, href: 1, driveUrl: 1, buttonHref: 1, submitUrl: 1, photo: 1, logoImage: 1, endpoint: 1 }; // 주소는 길어도 한 줄 칸
   var LONG = { text: 1, description: 1, a: 1, lead: 1, notice: 1, successText: 1 };
   var TEMPLATES = {
     items: { title: "", text: "", date: "", pinned: false },
     videos: { label: "", url: "" },
+    materials: { label: "", url: "" },
     events: { date: "", title: "", type: "행사", text: "" },
   };
   var EVENT_TYPES = ["휴강", "보강", "특강", "행사", "공휴일", "기타"];
+  // 묶음 제목 아래에 보여 줄 도움말
+  var SET_HINTS = {
+    materials: "구글 드라이브에서 파일 → 공유 → 링크 복사로 얻은 주소를 넣습니다. 공유 범위는 '링크가 있는 모든 사용자 – 뷰어'로 맞춰 주세요.",
+    videos: "YouTube 주소를 넣으면 주차를 펼쳤을 때 그 자리에서 바로 재생됩니다. 다른 주소는 링크로 표시됩니다.",
+  };
   function label(k) { return LABELS[k] || k; }
   function blank(v) {
     if (Array.isArray(v)) return [];
@@ -714,7 +796,7 @@
       input.addEventListener("change", function () { parent[key] = input.checked; markDirty(); });
       return h("label", { class: "ed-check" }, [input, h("span", {}, label(key))]);
     }
-    var long = typeof v === "string" && (v.length > 40 || LONG[key]);
+    var long = typeof v === "string" && !ONE_LINE[key] && (v.length > 40 || LONG[key]);
     input = h(long ? "textarea" : "input", long ? { rows: 3 } : { type: typeof v === "number" ? "number" : "text" });
     input.value = v;
     input.addEventListener("input", function () {
@@ -730,7 +812,11 @@
     Object.keys(obj).forEach(function (k) {
       if (HIDE[k]) return;
       var v = obj[k];
-      if (Array.isArray(v)) box.appendChild(h("fieldset", { class: "ed-set wide" }, [h("legend", {}, label(k)), arrayEditor(obj, k)]));
+      if (Array.isArray(v)) box.appendChild(h("fieldset", { class: "ed-set wide" }, [
+        h("legend", {}, label(k)),
+        SET_HINTS[k] ? h("p", { class: "field-hint" }, SET_HINTS[k]) : null,
+        arrayEditor(obj, k),
+      ]));
       else if (v && typeof v === "object") {
         box.appendChild(h("fieldset", { class: "ed-set wide" }, [
           h("legend", {}, label(k)),

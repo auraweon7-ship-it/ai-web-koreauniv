@@ -1110,3 +1110,26 @@ a { color: var(--accent); }
   .header-cta { display: none; }
   .site-footer { margin-top: 40px; }
 }
+
+/* ── 주차별 강의 자료·참고 영상, 주차 편집 창 ── */
+.material-link { text-decoration: none; color: var(--ink); }
+.material-link:hover { background: var(--purple-100); }
+.material-go { color: var(--orange); font-size: 12px; }
+.video-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 10px; }
+.video-item { margin: 0; min-width: 0; }
+.video-frame { position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); overflow: hidden; background: #151515; }
+.video-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.video-item figcaption { margin-top: 6px; font-size: 14px; color: var(--ink-soft); }
+.admin-only { display: none !important; }
+body.is-admin .admin-only { display: inline-flex !important; }
+body.is-admin .folio-add.admin-only { display: grid !important; }
+.week-item .card-admin.in-summary { margin-right: 4px; }
+.modal.modal-wide { width: min(760px, 100%); }
+.modal-wide .guide-edit .ed-grid { grid-template-columns: repeat(2, 1fr); }
+.modal .ed-field input, .modal .ed-row input { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: #fff; font: inherit; font-size: 15px; color: var(--ink); }
+.modal .ed-field input:focus, .modal .ed-row input:focus, .modal textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(18, 135, 108, 0.16); }
+.modal .ed-check input { width: 18px; height: 18px; padding: 0; }
+@media (max-width: 600px) {
+  .video-grid { grid-template-columns: 1fr; }
+  .modal-wide .guide-edit .ed-grid { grid-template-columns: 1fr; }
+}

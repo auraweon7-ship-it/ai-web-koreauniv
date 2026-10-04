@@ -401,6 +401,58 @@
     ]);
   }
 
+  // YouTube 주소에서 영상 ID를 꺼냅니다. YouTube 주소가 아니면 "".
+  function youtubeId(url) {
+    var m = /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|shorts\/|live\/))([\w-]{11})/.exec(url || "");
+    return m ? m[1] : "";
+  }
+  // 강의 자료(구글 드라이브 링크)
+  function materialsBlock(w) {
+    var list = (w.materials || []).filter(function (m) { return m && m.url; });
+    if (!list.length) return null;
+    return h("div", {}, [
+      h("h4", {}, "강의 자료"),
+      h("div", { class: "meta-row" }, list.map(function (m) {
+        return h("a", { class: "contact material-link", href: m.url, target: "_blank", rel: "noopener" }, [
+          h("span", { "aria-hidden": "true" }, "📎"), m.label || "강의 자료", h("span", { class: "material-go", "aria-hidden": "true" }, "↗"),
+        ]);
+      })),
+    ]);
+  }
+  // 참고 영상: YouTube 주소면 그 자리에서 재생(embed), 아니면 링크
+  function videosBlock(w) {
+    var list = (w.videos || []).filter(function (v) { return v && v.url; });
+    if (!list.length) return null;
+    var embeds = list.filter(function (v) { return youtubeId(v.url); });
+    var links = list.filter(function (v) { return !youtubeId(v.url); });
+    return h("div", {}, [
+      h("h4", {}, "참고 영상"),
+      embeds.length ? h("div", { class: "video-grid" }, embeds.map(function (v) {
+        // 영상은 주차를 펼쳤을 때 불러옵니다(data-yt → iframe).
+        return h("figure", { class: "video-item" }, [
+          h("div", { class: "video-frame", "data-yt": youtubeId(v.url), "data-title": v.label || "참고 영상" }),
+          v.label ? h("figcaption", {}, v.label) : null,
+        ]);
+      })) : null,
+      links.length ? h("div", { class: "meta-row" }, links.map(function (v) {
+        return h("a", { class: "contact video-link", href: v.url, target: "_blank", rel: "noopener" }, [
+          h("span", { "aria-hidden": "true" }, "▶"), v.label || v.url,
+        ]);
+      })) : null,
+    ]);
+  }
+  function loadVideos(root) {
+    [].forEach.call(root.querySelectorAll(".video-frame[data-yt]"), function (box) {
+      box.appendChild(h("iframe", {
+        src: "https://www.youtube-nocookie.com/embed/" + box.getAttribute("data-yt"),
+        title: box.getAttribute("data-title"), loading: "lazy", allowfullscreen: "allowfullscreen",
+        allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+        referrerpolicy: "strict-origin-when-cross-origin",
+      }));
+      box.removeAttribute("data-yt");
+    });
+  }
+
   var weekList = h("div", { class: "week-list" }, weeks.map(function (w) {
     return h("details", { class: "card week-item reveal", id: "week-" + w.week }, [
       h("summary", {}, [
@@ -420,18 +472,16 @@
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "📍"), h("b", {}, "장소"), w._place]),
         ]),
         h("div", {}, [h("h4", {}, "학습 내용"), dotList(w.topics)]),
-        w.videos && w.videos.length ? h("div", {}, [
-          h("h4", {}, "참고 영상"),
-          h("div", { class: "meta-row" }, w.videos.map(function (v) {
-            return h("a", { class: "contact video-link", href: v.url, target: "_blank", rel: "noopener" }, [
-              h("span", { "aria-hidden": "true" }, "▶"), v.label,
-            ]);
-          })),
-        ]) : null,
+        materialsBlock(w),
+        videosBlock(w),
         w.assignment ? assignmentBox(w) : null,
       ]),
     ]);
   }));
+
+  [].forEach.call(weekList.children, function (item) {
+    item.addEventListener("toggle", function () { if (item.open) loadVideos(item); });
+  });
 
   /* 월간 달력 */
   var calTitle = h("h4", { class: "cal-title", "aria-live": "polite" });
@@ -1488,7 +1538,7 @@
     remote: REMOTE, call: call, toast: showToast,
     setPollCounts: function (polls) { if (REMOTE) { remoteCounts = polls || {}; updatePoll(); } },
     hashSecret: hashSecret, rosterHash: rosterHash, sha256: sha256, weeks: weeks,
-    fmtDateTime: fmtDateTime, fmtShort: fmtShort, driveId: driveId,
+    fmtDateTime: fmtDateTime, fmtShort: fmtShort, driveId: driveId, youtubeId: youtubeId,
     // 공지를 바꾼 뒤 새로고침 없이 다시 그립니다.
     notices: {
       refresh: function (items) {
