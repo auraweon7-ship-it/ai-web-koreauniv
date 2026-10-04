@@ -5,8 +5,8 @@
  * 환경 변수
  *   DATABASE_URL    PostgreSQL 연결 주소 (없으면 사이트는 열리지만 저장은 각자 브라우저에만 됩니다)
  *   ADMIN_PASSWORD  (선택) 관리자 비밀번호. 넣으면 config의 비밀번호 지문 대신 이 값으로 검사합니다.
- *   SESSION_SECRET  (선택) 로그인 토큰 서명용 비밀값. 없으면 서버가 켜질 때마다 새로 만들어
- *                   재배포 뒤 다시 로그인해야 합니다.
+ *   SESSION_SECRET  (선택) 로그인 토큰 서명용 비밀값. 없으면 서버가 만들어 DB에 보관하므로
+ *                   재배포 뒤에도 로그인이 유지됩니다.
  *   PGSSL=1         (선택) DB 연결에 SSL이 필요할 때
  */
 "use strict";
@@ -19,7 +19,9 @@ const express = require("express");
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 5173;
-const SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+// 로그인 토큰 서명용 비밀값. SESSION_SECRET 변수가 없으면 DB에 한 번 만들어 두고 계속 씁니다.
+// (서버가 다시 켜지거나 새로 배포되어도 로그인이 유지되도록)
+let SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const DAY = 86400000;
 
 /* ── DB ── */
@@ -58,6 +60,12 @@ async function initDb() {
   try { await pool.query("ALTER TABLE roster ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT FALSE"); } catch (e) { /* 이미 있음 */ }
 
   // 명단 기능이 생기기 전에 들어온 신청서를 한 번만 명단으로 옮깁니다.
+  if (!process.env.SESSION_SECRET) {
+    // 여러 서버가 동시에 켜져도 같은 값을 쓰도록: 없을 때만 넣고, 저장된 값을 다시 읽어 옵니다.
+    await pool.query("INSERT INTO site_kv (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT (key) DO NOTHING", ["session_secret", SECRET, Date.now()]);
+    const kept = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["session_secret"]);
+    if (kept.rows.length) SECRET = kept.rows[0].value;
+  }
   const done = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["roster_backfilled"]);
   if (!done.rows.length) {
     const apps = await pool.query("SELECT data, created_at FROM applications ORDER BY created_at");
