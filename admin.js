@@ -772,7 +772,7 @@
   var SECTIONS = [
     ["site", "사이트 기본 정보"], ["hero", "첫 화면"], ["stats", "통계 카드"], ["about", "강의 소개(슬라이드)"],
     ["curriculum", "커리큘럼·일정"], ["portfolio", "포트폴리오"], ["guide", "수강 안내(AI 도구·준비물)"], ["participate", "참여하기(투표·신청서)"],
-    ["classroom", "내 강의실"], ["faq", "FAQ"], ["instructor", "교수자"], ["popup", "팝업 공통 설정"],
+    ["classroom", "수강생 로그인·출석 설정"], ["faq", "FAQ"], ["instructor", "교수자"], ["popup", "팝업 공통 설정"],
     ["welcome", "첫 방문 효과"], ["footer", "맨 아래 문구"], ["nav", "헤더 메뉴"],
   ];
   var LABELS = {
@@ -1236,10 +1236,11 @@
         var s = list[0];
         if (!s) { csvCells.push("미제출"); return h("td", { class: "mx" }, [h("span", { class: "mx-no" }, "미제출")]); }
         n++; perCol[ci]++;
-        csvCells.push((s.late ? "지각 " : "제출 ") + stamp(s.at) + " " + s.file);
-        return h("td", { class: "mx", title: s.file + (s.memo ? " · " + s.memo : "") + (list.length > 1 ? " · 총 " + list.length + "회 제출" : "") }, [
+        csvCells.push((s.late ? "지각 " : "제출 ") + stamp(s.at) + " " + (s.url || s.file));
+        return h("td", { class: "mx", title: (s.url || s.file) + (s.memo ? " · " + s.memo : "") + (list.length > 1 ? " · 총 " + list.length + "회 제출" : "") }, [
           h("span", { class: s.late ? "mx-late" : "mx-yes" }, s.late ? "지각" : "제출"),
           h("span", { class: "mx-time" }, stamp(s.at)),
+          s.url ? h("a", { class: "mx-link", href: s.url, target: "_blank", rel: "noopener" }, "📎 열기") : null,
         ]);
       });
       csv.push([i + 1, st.id, st.name].concat(csvCells).concat([n]));
@@ -1487,11 +1488,11 @@
     });
 
     var sub = store.get("submissions", {});
-    var subHead = ["학번", "이름", "주차", "과제", "파일", "크기(MB)", "제출 시각", "지각", "메모"];
+    var subHead = ["학번", "이름", "주차", "과제", "구글 드라이브 주소", "제출 시각", "지각", "메모"];
     var subRows = [];
     Object.keys(sub).forEach(function (id) {
       sub[id].forEach(function (s) {
-        subRows.push([id, nameOf(id), s.week, s.title, s.file, (s.size / 1024 / 1024).toFixed(2), stamp(s.at), s.late ? "지각" : "", s.memo || ""]);
+        subRows.push([id, nameOf(id), s.week, s.title, s.url || s.file, stamp(s.at), s.late ? "지각" : "", s.memo || ""]);
       });
     });
 

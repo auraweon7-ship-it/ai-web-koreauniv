@@ -56,6 +56,8 @@ async function initDb() {
     "CREATE TABLE IF NOT EXISTS roster (student_id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL, grade TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, source TEXT NOT NULL, created_at BIGINT NOT NULL, approved BOOLEAN NOT NULL DEFAULT FALSE)"
   );
   for (const sql of tables) await pool.query(sql);
+  // 과제를 구글 드라이브 공유 주소로 내기 전에 만든 제출 표에는 주소 열을 덧붙입니다(이미 있으면 그대로)
+  try { await pool.query("ALTER TABLE submissions ADD COLUMN IF NOT EXISTS drive_url TEXT NOT NULL DEFAULT ''"); } catch (e) { console.warn("drive_url 열 추가 건너뜀:", e.message); }
   // 승인 기능이 생기기 전에 만든 명단 표에는 승인 열을 덧붙입니다(이미 있으면 그대로).
   try { await pool.query("ALTER TABLE roster ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT FALSE"); } catch (e) { /* 이미 있음 */ }
 
@@ -294,19 +296,22 @@ api.post("/student/login", needDb, wrap(async function (req, res) {
 
 async function myRecords(id) {
   const att = await pool.query("SELECT week, at FROM attendance WHERE student_id = $1", [id]);
-  const sub = await pool.query("SELECT week, title, file_name, size, memo, late, at FROM submissions WHERE student_id = $1 ORDER BY at DESC", [id]);
+  const sub = await pool.query("SELECT week, title, file_name, drive_url, size, memo, late, at FROM submissions WHERE student_id = $1 ORDER BY at DESC", [id]);
   const attendance = {};
   att.rows.forEach(function (r) { attendance[r.week] = Number(r.at); });
   return {
     attendance: attendance,
     submissions: sub.rows.map(function (r) {
-      return { week: r.week, title: r.title, file: r.file_name, size: r.size, memo: r.memo, late: r.late, at: Number(r.at) };
+      return { week: r.week, title: r.title, file: r.file_name, url: r.drive_url || "", size: r.size, memo: r.memo, late: r.late, at: Number(r.at) };
     }),
   };
 }
 api.get("/me", needDb, needStudent, wrap(async function (req, res) {
   const out = await myRecords(req.student.id);
   out.approved = await isApproved(req.student.id, req.student.name, await effectiveConfig());
+  // 과제 제출 창에 보여 줄 내 인적사항(수강 신청서에 적은 내용)
+  const me = await pool.query("SELECT department, grade, email FROM roster WHERE student_id = $1", [req.student.id]);
+  if (me.rows.length) out.profile = { department: me.rows[0].department, grade: me.rows[0].grade, email: me.rows[0].email };
   res.json(out);
 }));
 // 출석·과제 제출은 승인된 수강생만
@@ -330,19 +335,22 @@ api.post("/attendance", needDb, needStudent, wrap(needApproved(async function (r
   res.json(Object.assign(await myRecords(req.student.id), { approved: true }));
 })));
 
+const DRIVE_URL = /^https:\/\/(?:drive|docs)\.google\.com\/.*?(?:\/d\/|\/folders\/|[?&]id=)[\w-]{10,}/;
 api.post("/submissions", needDb, needStudent, wrap(needApproved(async function (req, res) {
   const cfg = await effectiveConfig();
   const week = Number(req.body.week);
   const w = cfg.curriculum.weeks.filter(function (x) { return Number(x.week) === week; })[0];
   if (!w || !w.assignment) return res.status(400).json({ error: "과제가 없는 주차입니다." });
-  const fileName = str(req.body.fileName, 200).trim();
-  const size = Math.max(0, Math.min(2147483647, Number(req.body.size) || 0));
-  if (!fileName) return res.status(400).json({ error: "파일을 선택해 주세요." });
+  // 과제는 구글 드라이브 공유 주소로 냅니다(파일 자체는 받지 않습니다).
+  const driveUrl = str(req.body.driveUrl, 500).trim();
+  if (!DRIVE_URL.test(driveUrl)) return res.status(400).json({ error: "구글 드라이브 공유 주소를 입력해 주세요." });
+  const fileName = "구글 드라이브 링크";
+  const size = 0;
   const now = Date.now();
   const due = dueMs(w.assignment.due);
   await pool.query(
-    "INSERT INTO submissions (student_id, name, week, title, file_name, size, memo, late, at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-    [req.student.id, req.student.name, week, str(w.assignment.title, 200), fileName, size, str(req.body.memo, 2000), !isNaN(due) && now > due, now]);
+    "INSERT INTO submissions (student_id, name, week, title, file_name, size, memo, late, at, drive_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+    [req.student.id, req.student.name, week, str(w.assignment.title, 200), fileName, size, str(req.body.memo, 2000), !isNaN(due) && now > due, now, driveUrl]);
   res.json(Object.assign(await myRecords(req.student.id), { approved: true }));
 })));
 
@@ -448,12 +456,12 @@ api.delete("/admin/roster", needDb, needAdmin, wrap(async function (req, res) {
 
 api.get("/admin/records", needDb, needAdmin, wrap(async function (req, res) {
   const att = await pool.query("SELECT student_id, week, name, at FROM attendance ORDER BY student_id, week");
-  const sub = await pool.query("SELECT student_id, name, week, title, file_name, size, memo, late, at FROM submissions ORDER BY at DESC");
+  const sub = await pool.query("SELECT student_id, name, week, title, file_name, drive_url, size, memo, late, at FROM submissions ORDER BY at DESC");
   const apps = await pool.query("SELECT data, created_at FROM applications ORDER BY created_at");
   res.json({
     attendance: att.rows.map(function (r) { return { id: r.student_id, name: r.name, week: r.week, at: Number(r.at) }; }),
     submissions: sub.rows.map(function (r) {
-      return { id: r.student_id, name: r.name, week: r.week, title: r.title, file: r.file_name, size: r.size, memo: r.memo, late: r.late, at: Number(r.at) };
+      return { id: r.student_id, name: r.name, week: r.week, title: r.title, file: r.file_name, url: r.drive_url || "", size: r.size, memo: r.memo, late: r.late, at: Number(r.at) };
     }),
     applications: apps.rows.map(function (r) { return Object.assign(JSON.parse(r.data), { at: Number(r.created_at) }); }),
   });

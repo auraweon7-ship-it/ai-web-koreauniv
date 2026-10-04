@@ -135,6 +135,8 @@
   C.admin = C.admin || { passwordHash: "" };
   C.portfolio = C.portfolio || { id: "portfolio", eyebrow: "Portfolio", title: "우수 과제 포트폴리오", lead: "", buttonLabel: "과제물 보기", emptyText: "", items: [] };
   C.classroom.rosterHashes = C.classroom.rosterHashes || [];
+  // '내 강의실' 섹션은 없어졌습니다(로그인·출석·과제 제출은 주차별 학습에서). 저장된 설정에 남은 메뉴도 뺍니다.
+  C.nav = (C.nav || []).filter(function (n) { return n.id !== "classroom"; });
 
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -399,10 +401,14 @@
       h("b", {}, "🔒 승인된 수강생만 볼 수 있습니다"),
       h("p", {}, me
         ? "수강 신청은 접수되었고 관리자 승인을 기다리는 중입니다. 승인되면 학습 내용·강의 자료·참고 영상·과제가 보입니다."
-        : "수강 신청서를 내고 관리자 승인을 받은 뒤 '내 강의실'에 로그인하면 학습 내용·강의 자료·참고 영상·과제가 보입니다."),
+        : "수강 신청서를 내고 관리자 승인을 받은 뒤 로그인하면 학습 내용·강의 자료·참고 영상·과제가 보입니다."),
       me ? null : h("div", { class: "meta-row" }, [
         h("a", { class: "btn btn-primary btn-sm", href: "#apply" }, "수강 신청"),
-        h("a", { class: "btn btn-ghost btn-sm", href: "#classroom" }, "내 강의실 로그인"),
+        (function () {
+          var b = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "수강생 로그인");
+          b.addEventListener("click", function () { openStudent(null); });
+          return b;
+        })(),
       ]),
     ]);
   }
@@ -421,12 +427,14 @@
       h("p", {}, a.text),
       h("p", { class: "assign-due" }, [h("b", {}, "마감 "), fmtDateTime(w._due)]),
       (function () {
-        var url = a.submitUrl || sched.submitUrl;
-        var external = url.charAt(0) !== "#";
-        return h("a", {
-          class: "btn btn-primary btn-sm", href: url, "data-assign": w.week,
-          target: external ? "_blank" : "", rel: external ? "noopener" : "",
-        }, "과제 제출하기");
+        var url = a.submitUrl || sched.submitUrl || "#";
+        if (url.charAt(0) !== "#") { // 다른 사이트(LMS 등)로 제출하도록 정해 둔 과제
+          return h("a", { class: "btn btn-primary btn-sm", href: url, target: "_blank", rel: "noopener" }, "과제 제출하기");
+        }
+        // 이 사이트에서 제출: 팝업 창에서 구글 드라이브 공유 주소를 냅니다.
+        var b = h("button", { class: "btn btn-primary btn-sm", type: "button", "data-assign": w.week }, "과제 제출하기");
+        b.addEventListener("click", function () { openStudent(w.week); });
+        return b;
       })(),
     ]);
   }
@@ -560,6 +568,7 @@
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "🗓️"), h("b", {}, "날짜·시간"), fmtDate(w._date) + " " + w._time]),
           h("span", { class: "contact" }, [h("span", { "aria-hidden": "true" }, "📍"), h("b", {}, "장소"), w._place]),
         ]),
+        w.locked ? null : h("div", { class: "att-slot", "data-week": String(w.week) }),
         w.locked ? lockedBox() : h("div", {}, [h("h4", {}, "학습 내용"), dotList(w.topics || [])]),
         w.locked ? null : materialsBlock(w),
         w.locked ? null : videosBlock(w),
@@ -581,8 +590,10 @@
   var calNext = h("button", { class: "slider-btn cal-btn", type: "button", "aria-label": "다음 달" }, "›");
   var calToday = h("button", { class: "cal-today", type: "button" }, "오늘");
 
+  var studentBar = h("div", { class: "card student-bar reveal" }); // 수강생 로그인 상태 (아래 renderStudentBar에서 채움)
   var curEl = section(cur, [
     h("h3", { class: "sub-title reveal", id: "weeks-title" }, cur.weeksTitle),
+    studentBar,
     FULL ? null : notice("주차별 학습 내용은 관리자가 승인한 수강생에게만 공개됩니다. 주차 제목과 일정만 표시됩니다."),
     weekList,
     h("h3", { class: "sub-title gap-top reveal", id: "calendar" }, cur.calendarTitle),
@@ -1135,202 +1146,288 @@
     applyBox,
   ]);
 
-  /* ── 내 강의실: 로그인 · 출석 · 과제 제출 ── */
+  /* ── 수강생: 로그인 · 출석 · 과제 제출 ──
+   * 따로 섹션을 두지 않고 '주차별 학습'에서 합니다. 과제 제출은 팝업 창에서 구글 드라이브 공유 주소를 냅니다. */
   var room = C.classroom;
-  var roomBox = h("div", { class: "room" });
-  var pendingAssign = ""; // 커리큘럼의 '과제 제출하기'로 들어왔을 때 미리 고를 주차
-  var assignWeeks = weeks.filter(function (w) { return w.assignment; });
   var todayWeek = classMap[dateKey(todayStart)];
+  var studentModal = null; // 열려 있는 수강생 창 { week, body, close }
 
   // 서버에 저장된 내 출석·제출 기록을 화면에 반영
   function applyMine(res) {
     var me = store.get("session", null);
     if (!me) return;
-    var att = store.get("attendance", {}), sub = store.get("submissions", {});
+    var att = store.get("attendance", {}), subs = store.get("submissions", {});
     att[me.id] = res.attendance || {};
-    sub[me.id] = res.submissions || [];
+    subs[me.id] = res.submissions || [];
     store.set("attendance", att);
-    store.set("submissions", sub);
+    store.set("submissions", subs);
+    if (res.profile) { me.profile = res.profile; store.set("session", me); }
     // 방금 승인되었으면(또는 승인이 취소되었으면) 권한에 맞는 내용을 다시 받아 옵니다.
     if ("approved" in res && !!res.approved !== !!me.approved) {
       me.approved = !!res.approved;
       store.set("session", me);
       return location.reload();
     }
-    renderRoom();
+    renderStudent();
   }
   function syncMine() {
     var me = store.get("session", null);
     if (!REMOTE) return;
-    if (me && !me.token) { store.set("session", null); return renderRoom(); } // 서버 연결 전에 한 로그인은 다시
-    if (!me) return renderRoom();
+    if (me && !me.token) { store.set("session", null); return renderStudent(); } // 서버 연결 전에 한 로그인은 다시
+    if (!me) return renderStudent();
     call("GET", "me", undefined, me.token).then(applyMine).catch(function (err) {
-      if (err.status === 401) { store.set("session", null); renderRoom(); }
+      if (err.status === 401) { store.set("session", null); renderStudent(); }
     });
   }
+  function logoutStudent() {
+    store.set("session", null);
+    if (REMOTE) { location.hash = "#weeks-title"; return location.reload(); } // 잠긴 내용으로 되돌리기
+    if (studentModal) studentModal.close();
+    renderStudent(); updatePoll();
+  }
+  function renderStudent() {
+    renderStudentBar();
+    renderAttendance();
+    if (studentModal) drawStudentModal();
+  }
 
-  function renderRoom() {
-    roomBox.textContent = "";
+  // 주차 목록 위: 로그인 상태 한 줄
+  function renderStudentBar() {
+    studentBar.textContent = "";
     var me = store.get("session", null);
-
     if (!me) {
-      roomBox.appendChild(h("div", { class: "card login" }, [
-        h("h4", {}, "🔐 수강생 로그인"),
-        makeForm([
-          { name: "id", label: "학번", type: "text", required: true, placeholder: "숫자 10자리", pattern: "^\\d{10}$", patternMsg: "학번은 숫자 10자리로 입력해 주세요." },
-          { name: "name", label: "이름", type: "text", required: true, placeholder: "홍길동" },
-          { name: "code", label: "수강 코드", type: "password", required: true, wide: true, hint: "첫 수업에서 안내받은 코드를 입력하세요." },
-        ], "로그인", function (values, api) {
-          if (REMOTE) { // 서버가 수강 코드와 명단을 확인합니다.
-            return call("POST", "student/login", { id: values.id, name: values.name, code: values.code })
-              .then(function (res) {
-                store.set("session", { id: res.id, name: res.name, token: res.token, approved: !!res.approved });
-                location.hash = "#" + room.id;
-                location.reload();
-              })
-              .catch(function (err) { api.fail(err.field === "id" ? "id" : "code", err.message); });
-          }
-          var codeOk = room.accessCodeHash ? hashSecret(values.code) === room.accessCodeHash : values.code === room.accessCode;
-          if (!codeOk) return api.fail("code", "수강 코드가 맞지 않습니다.");
-          // 관리자가 명단을 등록했다면 명단에 있는 학번·이름만 들어올 수 있습니다.
-          if (room.rosterHashes.length && room.rosterHashes.indexOf(rosterHash(values.id, values.name)) < 0) {
-            return api.fail("id", "수강생 명단에 없는 학번·이름입니다.");
-          }
-          // 로그인 전에 한 투표는 내 학번으로 옮겨 한 사람이 두 번 투표하지 않게 합니다.
-          var allVotes = store.get("pollVotes", {});
-          var guest = voterId();
-          Object.keys(allVotes).forEach(function (pid) {
-            var votes = allVotes[pid];
-            if (!(guest in votes)) return;
-            if (!(("s:" + values.id) in votes)) votes["s:" + values.id] = votes[guest];
-            delete votes[guest];
-          });
-          store.set("pollVotes", allVotes);
-          store.set("session", { id: values.id, name: values.name });
-          renderRoom(); updatePoll();
-        }),
-      ]));
+      var login = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "수강생 로그인");
+      login.addEventListener("click", function () { openStudent(null); });
+      studentBar.appendChild(h("span", {}, "🔐 수강생은 로그인하면 출석을 체크하고 과제를 제출할 수 있습니다."));
+      studentBar.appendChild(login);
       return;
     }
-
-    var logout = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "로그아웃");
-    logout.addEventListener("click", function () {
-      store.set("session", null);
-      if (REMOTE) { location.hash = "#" + room.id; return location.reload(); } // 잠긴 내용으로 되돌리기
-      renderRoom(); updatePoll();
-    });
-
-    /* 출석 */
-    var allAtt = store.get("attendance", {});
-    var myAtt = allAtt[me.id] || {};
-    function checkIn(w) {
-      myAtt[w.week] = Date.now();
-      allAtt[me.id] = myAtt;
-      store.set("attendance", allAtt);
-      renderRoom();
-      if (REMOTE) {
-        call("POST", "attendance", { week: w.week }, me.token).then(applyMine)
-          .catch(function (err) { showToast(err.message); if (err.status === 401) store.set("session", null); syncMine(); });
-      }
-    }
-    var attended = weeks.filter(function (w) { return myAtt[w.week]; }).length;
-    var todayBtn = h("button", { class: "btn btn-primary btn-sm", type: "button" },
-      todayWeek ? (myAtt[todayWeek.week] ? "오늘 출석 완료 ✓" : "오늘(" + todayWeek.week + "주차) 출석 체크") : "오늘은 수업일이 아닙니다");
-    todayBtn.disabled = !todayWeek || !!myAtt[todayWeek.week];
-    if (todayWeek) todayBtn.addEventListener("click", function () { checkIn(todayWeek); });
-
-    var attCard = h("div", { class: "card" }, [
-      h("h4", {}, "✅ 출석 체크"),
-      h("div", { class: "att-top" }, [
-        h("span", {}, [h("b", { class: "att-count" }, attended), " / " + weeks.length + "회 출석"]),
-        todayBtn,
-      ]),
-      h("div", { class: "bar" }, [h("div", { class: "bar-fill", style: "width:" + Math.round((attended / weeks.length) * 100) + "%" })]),
-      h("div", { class: "att-grid" }, weeks.map(function (w) {
-        var done = !!myAtt[w.week];
-        var canCheck = !done && room.testMode;
-        var chip = h(canCheck ? "button" : "div", {
-          class: "att-chip" + (done ? " done" : "") + (w === todayWeek ? " today" : ""),
-          type: canCheck ? "button" : "",
-          title: done ? "출석 " + fmtStamp(myAtt[w.week]) : fmtShort(w._date),
-          "aria-label": w.week + "주차 " + fmtShort(w._date) + (done ? " 출석함" : " 미출석"),
-        }, [h("b", {}, w.week + "주"), h("span", {}, done ? "✓" : (w._date.getMonth() + 1) + "/" + w._date.getDate())]);
-        if (canCheck) chip.addEventListener("click", function () { checkIn(w); });
-        return chip;
-      })),
-      room.testMode ? h("p", { class: "field-hint" }, "미리 보기 모드: 주차를 누르면 출석으로 표시됩니다.") : null,
-    ]);
-
-    /* 과제 제출 */
-    var allSub = store.get("submissions", {});
-    var mySub = allSub[me.id] || [];
-    var subForm = makeForm([
-      {
-        name: "week", label: "과제 선택", type: "select", required: true, wide: true,
-        options: assignWeeks.map(function (w) {
-          return { value: String(w.week), label: w.week + "주차 · " + w.assignment.title + " (마감 " + fmtDateTime(w._due) + ")" };
-        }),
-      },
-      { name: "file", label: "과제 파일", type: "file", required: true, accept: room.fileAccept, maxMB: room.fileMaxMB, hint: room.fileAccept + " · 최대 " + room.fileMaxMB + "MB" },
-      { name: "memo", label: "메모", type: "textarea", required: false, placeholder: "교수자에게 남길 말(선택)" },
-    ], "과제 제출하기", function (values) {
-      var w = weeks.filter(function (x) { return String(x.week) === values.week; })[0];
-      var at = Date.now();
-      mySub.unshift({ week: w.week, title: w.assignment.title, file: values.file.name, size: values.file.size, memo: values.memo, at: at, late: at > w._due.getTime() });
-      allSub[me.id] = mySub;
-      store.set("submissions", allSub);
-      renderRoom();
-      if (REMOTE) {
-        call("POST", "submissions", { week: w.week, fileName: values.file.name, size: values.file.size, memo: values.memo }, me.token).then(applyMine)
-          .catch(function (err) { showToast(err.message); if (err.status === 401) store.set("session", null); syncMine(); });
-      }
-    });
-    if (pendingAssign) { subForm.setValue("week", pendingAssign); pendingAssign = ""; }
-
-    var subCard = h("div", { class: "card" }, [
-      h("h4", {}, "📤 과제 제출"),
-      subForm,
-      h("h4", { class: "sub-list-title" }, "제출 내역"),
-      mySub.length ? h("ul", { class: "sub-list" }, mySub.map(function (s) {
-        return h("li", {}, [
-          h("div", {}, [
-            h("b", {}, s.week + "주차 · " + s.title),
-            h("span", { class: "tag" + (s.late ? "" : " tag-assign") }, s.late ? "지각 제출" : "제출 완료"),
-          ]),
-          h("div", { class: "sub-meta" }, "📎 " + s.file + " (" + (s.size / 1024 / 1024).toFixed(2) + "MB) · " + fmtStamp(s.at)),
-        ]);
-      })) : h("p", { class: "cal-empty" }, "아직 제출한 과제가 없습니다."),
-    ]);
-
     var waiting = REMOTE && !me.approved;
-    roomBox.appendChild(h("div", { class: "card room-bar" }, [
-      h("div", {}, [
-        h("b", {}, me.name + "님"), h("span", { class: "sub-meta" }, " · 학번 " + me.id),
-        REMOTE ? h("span", { class: "tag " + (waiting ? "" : "tag-assign") }, waiting ? "승인 대기" : "승인됨") : null,
-      ]),
-      logout,
+    var mine = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "내 제출 내역");
+    mine.addEventListener("click", function () { openStudent(null); });
+    var out = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "로그아웃");
+    out.addEventListener("click", logoutStudent);
+    var myAtt = (store.get("attendance", {})[me.id]) || {};
+    var attended = weeks.filter(function (w) { return myAtt[w.week]; }).length;
+    studentBar.appendChild(h("span", {}, [
+      "👤 ", h("b", {}, me.name + "님"), h("span", { class: "sub-meta" }, " · 학번 " + me.id),
+      REMOTE ? h("span", { class: "tag " + (waiting ? "" : "tag-assign") }, waiting ? "승인 대기" : "승인됨") : null,
+      waiting ? null : h("span", { class: "sub-meta" }, " · 출석 " + attended + "/" + weeks.length + "회"),
     ]));
-    if (waiting) {
-      roomBox.appendChild(h("div", { class: "card locked-box" }, [
-        h("b", {}, "⏳ 관리자 승인을 기다리는 중입니다"),
-        h("p", {}, "승인되면 주차별 학습 내용을 볼 수 있고, 출석 체크와 과제 제출도 할 수 있습니다. 승인 뒤에는 이 화면을 새로 고쳐 주세요."),
-      ]));
-      return;
-    }
-    roomBox.appendChild(h("div", { class: "grid grid-2 room-grid" }, [attCard, subCard]));
+    studentBar.appendChild(h("span", { class: "student-bar-btns" }, waiting ? [out] : [mine, out]));
   }
 
-  var roomEl = section(room, [
-    notice(REMOTE ? "출석과 제출 기록은 서버에 저장됩니다. 과제 파일 자체는 전송되지 않고 파일 이름·크기·제출 시각만 기록됩니다." : room.notice),
-    roomBox,
-  ]);
+  // 각 주차 안: 출석 체크 버튼 (수업 당일, 미리 보기 모드에서는 아무 주차나)
+  function renderAttendance() {
+    var me = store.get("session", null);
+    var allAtt = store.get("attendance", {});
+    var myAtt = (me && allAtt[me.id]) || {};
+    [].forEach.call(document.querySelectorAll(".att-slot"), function (slot) {
+      slot.textContent = "";
+      var w = weeks.filter(function (x) { return String(x.week) === slot.getAttribute("data-week"); })[0];
+      if (!w || !me || (REMOTE && !me.approved)) return;
+      if (myAtt[w.week]) {
+        slot.appendChild(h("span", { class: "tag tag-assign" }, "✓ 출석 완료 · " + fmtStamp(myAtt[w.week])));
+        return;
+      }
+      if (w !== todayWeek && !room.testMode) return;
+      var b = h("button", { class: "btn btn-ghost btn-sm", type: "button" }, "✅ " + w.week + "주차 출석 체크");
+      b.addEventListener("click", function () {
+        myAtt[w.week] = Date.now();
+        allAtt[me.id] = myAtt;
+        store.set("attendance", allAtt);
+        renderStudent();
+        if (REMOTE) {
+          call("POST", "attendance", { week: w.week }, me.token).then(applyMine)
+            .catch(function (err) { showToast(err.message); if (err.status === 401) store.set("session", null); syncMine(); });
+        }
+      });
+      slot.appendChild(b);
+    });
+  }
 
-  // 커리큘럼의 '과제 제출하기' → 내 강의실에서 해당 과제를 미리 선택
+  // 수강생 창 열기. week가 있으면 그 주차 과제 제출, 없으면 로그인·내 제출 내역.
+  function openStudent(week) {
+    if (studentModal) studentModal.close();
+    var lastFocus = document.activeElement;
+    var closeBtn = h("button", { class: "modal-close", type: "button", "aria-label": "닫기" }, "×");
+    var body = h("div", { class: "student-modal" });
+    var modal = h("div", { class: "modal modal-form modal-wide", role: "dialog", "aria-modal": "true", "aria-label": "과제 제출" }, [closeBtn, body]);
+    var backdrop = h("div", { class: "modal-backdrop" }, [modal]);
+    var self = { week: week == null ? null : Number(week), body: body, timer: 0 };
+    self.close = function () {
+      if (studentModal !== self) return;
+      studentModal = null;
+      clearInterval(self.timer);
+      backdrop.classList.remove("show");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(function () { backdrop.remove(); }, 250);
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+    };
+    function onKey(e) { if (e.key === "Escape") self.close(); }
+    closeBtn.addEventListener("click", self.close);
+    backdrop.addEventListener("click", function (e) { if (e.target === backdrop) self.close(); });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(backdrop);
+    studentModal = self;
+    drawStudentModal();
+    requestAnimationFrame(function () { backdrop.classList.add("show"); });
+  }
+
+  function subItem(s) {
+    return h("li", {}, [
+      h("div", {}, [
+        h("b", {}, s.week + "주차 · " + s.title),
+        h("span", { class: "tag" + (s.late ? "" : " tag-assign") }, s.late ? "지각 제출" : "제출 완료"),
+      ]),
+      h("div", { class: "sub-meta" }, [
+        fmtStamp(s.at) + " · ",
+        s.url ? h("a", { href: s.url, target: "_blank", rel: "noopener" }, "📎 구글 드라이브에서 열기 ↗") : "📎 " + (s.file || ""),
+      ]),
+      s.memo ? h("div", { class: "sub-meta" }, "메모: " + s.memo) : null,
+    ]);
+  }
+  function infoRow(label, value) { return h("div", { class: "info-row" }, [h("dt", {}, label), h("dd", {}, value)]); }
+
+  function drawStudentModal() {
+    var self = studentModal, box = self.body;
+    clearInterval(self.timer);
+    box.textContent = "";
+    var me = store.get("session", null);
+    var w = self.week == null ? null : weeks.filter(function (x) { return Number(x.week) === self.week; })[0];
+    var head = function (icon, title, text) {
+      box.appendChild(h("div", { class: "modal-emoji", "aria-hidden": "true" }, icon));
+      box.appendChild(h("h2", {}, title));
+      if (text) box.appendChild(h("p", { class: "student-modal-lead" }, text));
+    };
+
+    /* 1) 로그인 전 */
+    if (!me) {
+      head("🔐", "수강생 로그인", w ? w.week + "주차 과제를 제출하려면 먼저 로그인해 주세요." : "로그인하면 출석을 체크하고 과제를 제출할 수 있습니다.");
+      box.appendChild(makeForm([
+        { name: "id", label: "학번", type: "text", required: true, placeholder: "숫자 10자리", pattern: "^\\d{10}$", patternMsg: "학번은 숫자 10자리로 입력해 주세요." },
+        { name: "name", label: "이름", type: "text", required: true, placeholder: "홍길동" },
+        { name: "code", label: "수강 코드", type: "password", required: true, wide: true, hint: "첫 수업에서 안내받은 코드를 입력하세요." },
+      ], "로그인", function (values, api) {
+        if (REMOTE) { // 서버가 수강 코드와 명단을 확인합니다.
+          return call("POST", "student/login", { id: values.id, name: values.name, code: values.code })
+            .then(function (res) {
+              store.set("session", { id: res.id, name: res.name, token: res.token, approved: !!res.approved });
+              if (w) store.set("openAssign", w.week); // 새로 고친 뒤 제출 창을 이어서 엽니다.
+              location.hash = w ? "#week-" + w.week : "#weeks-title";
+              location.reload();
+            })
+            .catch(function (err) { api.fail(err.field === "id" ? "id" : "code", err.message); });
+        }
+        var codeOk = room.accessCodeHash ? hashSecret(values.code) === room.accessCodeHash : values.code === room.accessCode;
+        if (!codeOk) return api.fail("code", "수강 코드가 맞지 않습니다.");
+        // 관리자가 명단을 등록했다면 명단에 있는 학번·이름만 들어올 수 있습니다.
+        if (room.rosterHashes.length && room.rosterHashes.indexOf(rosterHash(values.id, values.name)) < 0) {
+          return api.fail("id", "수강생 명단에 없는 학번·이름입니다.");
+        }
+        // 로그인 전에 한 투표는 내 학번으로 옮겨 한 사람이 두 번 투표하지 않게 합니다.
+        var allVotes = store.get("pollVotes", {});
+        var guest = voterId();
+        Object.keys(allVotes).forEach(function (pid) {
+          var votes = allVotes[pid];
+          if (!(guest in votes)) return;
+          if (!(("s:" + values.id) in votes)) votes["s:" + values.id] = votes[guest];
+          delete votes[guest];
+        });
+        store.set("pollVotes", allVotes);
+        store.set("session", { id: values.id, name: values.name });
+        renderStudent(); updatePoll();
+      }));
+      return;
+    }
+
+    var prof = me.profile || {};
+    var person = h("dl", { class: "info-list" }, [
+      infoRow("이름", me.name), infoRow("학번", me.id),
+      prof.department ? infoRow("학과", prof.department) : null,
+      prof.grade ? infoRow("학년", prof.grade) : null,
+      prof.email ? infoRow("이메일", prof.email) : null,
+    ]);
+    var out = h("button", { class: "modal-link", type: "button" }, "로그아웃");
+    out.addEventListener("click", logoutStudent);
+
+    /* 2) 승인 대기 */
+    if (REMOTE && !me.approved) {
+      head("⏳", "관리자 승인을 기다리는 중입니다", "승인되면 주차별 학습 내용을 볼 수 있고, 출석 체크와 과제 제출도 할 수 있습니다.");
+      box.appendChild(h("h4", {}, "수강생 정보"));
+      box.appendChild(person);
+      box.appendChild(h("div", { class: "modal-foot" }, [out]));
+      return;
+    }
+
+    var mySub = (store.get("submissions", {})[me.id]) || [];
+
+    /* 3) 내 제출 내역 (주차를 정하지 않고 열었을 때) */
+    if (!w || !w.assignment) {
+      head("🗂️", "내 제출 내역", "과제는 주차별 학습의 각 과제에 있는 '과제 제출하기'에서 냅니다.");
+      box.appendChild(h("h4", {}, "수강생 정보"));
+      box.appendChild(person);
+      box.appendChild(h("h4", {}, "제출 내역"));
+      box.appendChild(mySub.length ? h("ul", { class: "sub-list" }, mySub.map(subItem)) : h("p", { class: "cal-empty" }, "아직 제출한 과제가 없습니다."));
+      box.appendChild(h("div", { class: "modal-foot" }, [out]));
+      return;
+    }
+
+    /* 4) 과제 제출 */
+    head("📤", "과제 제출", "");
+    var nowText = h("b", {}, fmtStamp(Date.now()));
+    var lateTag = h("span", { class: "tag" }, "지각 제출");
+    function tick() { nowText.textContent = fmtStamp(Date.now()); lateTag.hidden = Date.now() <= w._due.getTime(); }
+    tick();
+    self.timer = setInterval(tick, 1000);
+    box.appendChild(h("h4", {}, "수강생 정보"));
+    box.appendChild(person);
+    box.appendChild(h("h4", {}, "제출 정보"));
+    box.appendChild(h("dl", { class: "info-list" }, [
+      infoRow("제출 주차", w.week + "주차 · " + w.assignment.title),
+      infoRow("마감", fmtDateTime(w._due)),
+      infoRow("제출 일시", [nowText, " ", lateTag, h("small", { class: "sub-meta" }, " (제출 버튼을 누른 시각으로 기록됩니다)")]),
+    ]));
+    box.appendChild(makeForm([
+      {
+        name: "driveUrl", label: "구글 드라이브 공유 주소", type: "text", required: true, wide: true, placeholder: "https://drive.google.com/…",
+        hint: "구글 드라이브에서 파일 → 공유 → '링크가 있는 모든 사용자'로 바꾼 뒤 링크를 복사해 붙여 넣으세요.",
+      },
+      { name: "memo", label: "메모", type: "textarea", required: false, wide: true, placeholder: "교수자에게 남길 말(선택)" },
+    ], "과제 제출하기", function (values, api) {
+      var url = String(values.driveUrl || "").trim();
+      if (!driveId(url)) return api.fail("driveUrl", "구글 드라이브 공유 주소가 아닙니다. (drive.google.com 또는 docs.google.com)");
+      var at = Date.now();
+      var rec = { week: w.week, title: w.assignment.title, url: url, file: "", size: 0, memo: values.memo, at: at, late: at > w._due.getTime() };
+      function done() { showToast(w.week + "주차 과제를 제출했습니다."); }
+      if (!REMOTE) {
+        var all = store.get("submissions", {});
+        (all[me.id] = all[me.id] || []).unshift(rec);
+        store.set("submissions", all);
+        renderStudent();
+        return done();
+      }
+      return call("POST", "submissions", { week: w.week, driveUrl: url, memo: values.memo }, me.token)
+        .then(function (res) { applyMine(res); done(); })
+        .catch(function (err) {
+          if (err.status === 401) { store.set("session", null); return syncMine(); }
+          api.error(err.message);
+        });
+    }));
+    var forWeek = mySub.filter(function (s) { return Number(s.week) === Number(w.week); });
+    if (forWeek.length) {
+      box.appendChild(h("h4", { class: "sub-list-title" }, "이 과제의 제출 내역 (" + forWeek.length + "회)"));
+      box.appendChild(h("ul", { class: "sub-list" }, forWeek.map(subItem)));
+    }
+    box.appendChild(h("div", { class: "modal-foot" }, [out]));
+  }
+
+  // 예전 '내 강의실'(#classroom)로 가던 링크는 수강생 창을 엽니다.
   document.addEventListener("click", function (e) {
-    var a = e.target.closest ? e.target.closest("a[data-assign]") : null;
-    if (!a || a.getAttribute("href") !== "#" + room.id) return;
-    pendingAssign = a.getAttribute("data-assign");
-    renderRoom();
+    var a = e.target.closest ? e.target.closest('a[href="#classroom"]') : null;
+    if (!a) return;
+    e.preventDefault();
+    openStudent(a.getAttribute("data-assign"));
   });
 
   /* ── 공지사항 ── 자주 묻는 질문 아래. 카드를 누르면 내용이 펼쳐집니다. */
@@ -1372,11 +1469,19 @@
   var noticeEl = section(noticeCfg, [noticeBox]);
 
   var main = document.getElementById("main");
-  [heroEl, statsEl, aboutEl, curEl, folioEl, guideEl, joinEl, roomEl, faqEl, noticeEl].forEach(function (el) { if (el) main.appendChild(el); });
+  [heroEl, statsEl, aboutEl, curEl, folioEl, guideEl, joinEl, faqEl, noticeEl].forEach(function (el) { if (el) main.appendChild(el); });
   updatePoll();
   renderApply();
-  renderRoom();
+  renderStudent();
   syncMine();
+  // 로그인하느라 새로 고쳤다면 내려던 과제의 제출 창을 이어서 엽니다.
+  (function () {
+    var wk = store.get("openAssign", null);
+    if (wk == null) return;
+    store.set("openAssign", null);
+    var me = store.get("session", null);
+    if (me && (!REMOTE || me.approved)) setTimeout(function () { openStudent(wk); }, 600);
+  })();
 
   /* ── 푸터: 교수자 사진·소개·연락처 ── */
   var ins = C.instructor;

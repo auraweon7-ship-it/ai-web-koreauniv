@@ -12,7 +12,7 @@ window.SITE_CONFIG = {
     university: "고려대학교",
     department: "○○학과",
     courseTitle: "AI WEB",
-    version: "v1.2.0", // 제목 오른쪽에 빨간 글씨로 표시. 비워 두면 표시하지 않습니다.
+    version: "v1.3.0", // 제목 오른쪽에 빨간 글씨로 표시. 비워 두면 표시하지 않습니다.
     logoImage: "images/logo.webp", // 로고 이미지 경로. 비워 두면 아래 이모지가 로고로 쓰입니다.
     logoEmoji: "🌸",
     // 첫 화면·브라우저 탭의 제목 옆에 붙는 소속 줄. 비워 두면 위의 "대학교 학과"가 표시됩니다.
@@ -28,7 +28,6 @@ window.SITE_CONFIG = {
     { id: "portfolio", label: "포트폴리오" },
     { id: "guide", label: "수강 안내" },
     { id: "participate", label: "참여하기" },
-    { id: "classroom", label: "내 강의실" },
     { id: "faq", label: "FAQ" },
     { id: "instructor", label: "교수자" },
   ],
@@ -171,7 +170,7 @@ window.SITE_CONFIG = {
      *   firstClass : 1주차 수업일 (2026-09-01은 화요일)
      *   time       : 기본 수업 시간
      *   location   : 기본 수업 장소
-     *   submitUrl  : 과제 제출 버튼이 열 주소. "#classroom"이면 이 사이트의 '내 강의실'로 이동합니다. */
+     *   submitUrl  : 과제 제출 버튼이 열 주소. "#classroom"이면 이 사이트의 과제 제출 창(구글 드라이브 공유 주소 입력)이 열립니다. */
     schedule: {
       firstClass: "2026-09-01",
       time: "13:00 – 15:00",
