@@ -136,6 +136,14 @@
     h("span", { class: "brand-title" }, [courseName, site.version ? h("span", { class: "ver" }, site.version) : null]),
   ]));
 
+  var headerCta = C.hero.buttons.filter(function (b) { return b.primary; })[0];
+  if (headerCta) {
+    var ctaExternal = headerCta.href.charAt(0) !== "#";
+    document.querySelector(".header-inner").appendChild(h("a", {
+      class: "header-cta", href: headerCta.href, target: ctaExternal ? "_blank" : "", rel: ctaExternal ? "noopener" : "",
+    }, headerCta.label));
+  }
+
   var nav = document.getElementById("siteNav");
   C.nav.forEach(function (item) {
     nav.appendChild(h("a", { href: "#" + item.id, "data-target": item.id }, item.label));
@@ -143,43 +151,50 @@
 
   /* ── 첫 화면 ── */
   var hero = C.hero;
+  var quickCard = h("div", { class: "card quick" }, hero.quickInfo.map(function (it) {
+    return h("div", { class: "quick-item" }, [
+      iconBubble(it.icon),
+      h("div", {}, [
+        h("div", { class: "quick-label" }, it.label),
+        h("div", { class: "quick-value" }, it.value),
+      ]),
+    ]);
+  }));
+  // 오른쪽 그림: 비스듬한 알약 모양 조각. hero.image가 있으면 그 사진을, 없으면 로고를 씁니다.
+  var heroArt = h("div", { class: "hero-art", "aria-hidden": "true" }, [
+    h("div", {
+      class: "hero-art-img" + (hero.image ? " photo" : ""),
+      style: hero.image ? "background-image:url('" + hero.image + "')"
+        : (site.logoImage ? "background-image:url('" + site.logoImage + "'),linear-gradient(135deg,#0f8a70,#1d6fd1 55%,#f39a12)" : ""),
+    }),
+    h("span", { class: "dot dot-green" }), h("span", { class: "dot dot-blue" }), h("span", { class: "dot dot-red" }),
+  ]);
   var heroEl = h("section", { class: "hero" }, [
+    h("span", { class: "dot dot-orange hero-dot-a", "aria-hidden": "true" }),
+    h("span", { class: "hero-pill-deco", "aria-hidden": "true" }),
     h("div", { class: "container" }, [
-      h("span", { class: "hero-badge" }, hero.badge),
-      h("p", { class: "hero-dept" }, orgLine),
-      h("h1", {}, [courseName, site.version ? h("span", { class: "ver" }, site.version) : null]),
-      h("p", { class: "hero-subtitle" }, hero.subtitle),
-      h("p", { class: "hero-desc" }, hero.description),
-      h("div", { class: "hero-actions" }, hero.buttons.map(function (b) {
-        var external = b.href.charAt(0) !== "#";
-        return h("a", {
-          class: "btn " + (b.primary ? "btn-primary" : "btn-ghost"),
-          href: b.href,
-          target: external ? "_blank" : "",
-          rel: external ? "noopener" : "",
-        }, b.label);
-      })),
-      h("div", { class: "card quick" }, hero.quickInfo.map(function (it) {
-        return h("div", { class: "quick-item" }, [
-          iconBubble(it.icon),
-          h("div", {}, [
-            h("div", { class: "quick-label" }, it.label),
-            h("div", { class: "quick-value" }, it.value),
-          ]),
-        ]);
-      })),
+      h("div", { class: "hero-grid" }, [
+        h("div", { class: "hero-copy" }, [
+          h("span", { class: "hero-badge" }, hero.badge),
+          h("h1", {}, [courseName, site.version ? h("span", { class: "ver" }, site.version) : null]),
+          h("p", { class: "hero-subtitle" }, hero.subtitle),
+          h("p", { class: "hero-dept" }, orgLine),
+          h("p", { class: "hero-desc" }, hero.description),
+          h("div", { class: "hero-actions" }, hero.buttons.map(function (b) {
+            var external = b.href.charAt(0) !== "#";
+            return h("a", {
+              class: "btn " + (b.primary ? "btn-primary" : "btn-ghost"),
+              href: b.href,
+              target: external ? "_blank" : "",
+              rel: external ? "noopener" : "",
+            }, b.label);
+          })),
+        ]),
+        heroArt,
+      ]),
+      quickCard,
     ]),
   ]);
-  // 벚꽃잎
-  for (var i = 0; i < 12; i++) {
-    var size = 10 + Math.random() * 10;
-    heroEl.appendChild(h("span", {
-      class: "petal",
-      "aria-hidden": "true",
-      style: "left:" + (Math.random() * 100) + "%;width:" + size + "px;height:" + size + "px;" +
-        "animation-duration:" + (9 + Math.random() * 9) + "s;animation-delay:-" + (Math.random() * 18) + "s;",
-    }));
-  }
 
   /* ── 통계 ── */
   var statsEl = h("section", { class: "stats", "aria-label": "숫자로 보는 강의" }, [
@@ -1225,7 +1240,7 @@
     var W = window.innerWidth, H = window.innerHeight;
     canvas.width = W * dpr; canvas.height = H * dpr;
     ctx.scale(dpr, dpr);
-    var colors = ["#f58fb8", "#e96a9f", "#a98be6", "#7a55c7", "#ffd0e2", "#ffd76a", "#ffffff"];
+    var colors = ["#12876c", "#4fb89c", "#f39a12", "#f7b955", "#2f8fe0", "#e5533d", "#151515"];
     var parts = [];
     var bursts = 7, launched = 0;
 
