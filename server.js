@@ -68,6 +68,21 @@ async function initDb() {
     const kept = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["session_secret"]);
     if (kept.rows.length) SECRET = kept.rows[0].value;
   }
+  // 문구 고침: config.js에서 바꾼 문구가 DB에 저장된 수정본에도 남아 있으면 같이 바꿉니다.
+  // (수정본이 있으면 config.js보다 우선하므로, 파일만 고쳐서는 화면에 반영되지 않습니다.)
+  const TEXT_FIXES = [
+    ["서울특별시 동대문구 이문로 107 교수회관 529호", "서울특별시 동대문구 이문로 107"],
+  ];
+  const stored = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["config"]);
+  if (stored.rows.length) {
+    let text = stored.rows[0].value;
+    TEXT_FIXES.forEach(function (fix) { text = text.split(fix[0]).join(fix[1]); });
+    if (text !== stored.rows[0].value) {
+      JSON.parse(text); // 형식이 깨지지 않았는지 확인
+      await pool.query("UPDATE site_kv SET value = $1, updated_at = $2 WHERE key = $3", [text, Date.now(), "config"]);
+      console.log("저장된 수정본의 문구를 고쳤습니다.");
+    }
+  }
   const done = await pool.query("SELECT value FROM site_kv WHERE key = $1", ["roster_backfilled"]);
   if (!done.rows.length) {
     const apps = await pool.query("SELECT data, created_at FROM applications ORDER BY created_at");
