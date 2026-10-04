@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>강의 소개</title>
+  <meta name="description" content="AI WEB — AI 기반 데이터 활용능력 배양 강의 소개">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=20261004q">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+
+  <header class="site-header" id="top">
+    <div class="container header-inner">
+      <a class="brand" href="#top" id="brand"></a>
+      <button class="lock-btn" id="adminBtn" type="button" aria-label="관리자 모드" title="관리자 모드">🔒</button>
+      <button class="nav-toggle" id="navToggle" aria-label="메뉴 열기" aria-expanded="false" aria-controls="siteNav">
+        <span></span><span></span><span></span>
+      </button>
+      <nav class="site-nav" id="siteNav" aria-label="주요 메뉴"></nav>
+    </div>
+  </header>
+
+  <main id="main"></main>
+
+  <footer class="site-footer" id="footer"></footer>
+
+  <button class="to-top" id="toTop" aria-label="맨 위로 이동" title="맨 위로">↑</button>
+
+  <noscript><p style="padding:2rem;text-align:center">이 사이트는 자바스크립트를 켜야 내용이 표시됩니다.</p></noscript>
+
+  <!-- ?v= 뒤 숫자를 바꾸면 방문자의 브라우저가 예전 파일 대신 새 파일을 받아 갑니다. 파일을 고쳐 다시 올릴 때 함께 바꾸세요. -->
+  <script src="config.js?v=20261004q"></script>
+  <script src="app.js?v=20261004q"></script>
+  <script src="admin.js?v=20261004q"></script>
+</body>
+</html>
